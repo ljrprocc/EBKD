@@ -1,2 +1,1 @@
-# EBKD
-Energy-Based Knowledge Distillation
+Code implementation for paper "Energy-Based Knowledge Distillation."
