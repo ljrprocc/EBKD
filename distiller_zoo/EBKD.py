@@ -45,25 +45,13 @@ class EBKD(nn.Module):
     - mcmc: Langevin MCMC
     - sm: Score matching. Only support Sliced Score Matching now.
     - nce: Noise Contrastive Estimation
+    implementing JEM.
     '''
-    def __init__(self, T, teacher_path=None, num_classes=100):
+    def __init__(self, T):
         super(EBKD, self).__init__()
         self.T = T
+        # self.num_classes = num_classes
         # self.mode = mode
-        sim_matrix = create_similarity(teacher_path, scale=0.1)
-        self.y = getDirichl(100, num_classes=num_classes, sim_matrix=sim_matrix, scale=1.)
-        self.y = torch.mean(self.y, 0)
-        self.embed = nn.Embedding(num_classes, num_classes)
-        self.label = torch.arange(num_classes)
-
-        # print(self.y)
-        # Energy model to save 
-        # self.model = nn.Sequential(
-        #     *[nn.Linear(256, 256), 
-        #     nn.LeakyReLU(0.1, True),
-        #     nn.Linear(256, 128),
-        #     nn.LeakyReLU(0.1, True),
-        #     nn.Linear(128, 1)]
         # )
     
     def forward(self, f_s, f_t):
@@ -72,38 +60,9 @@ class EBKD(nn.Module):
         f_t: logit of teacher model, get E_t(x)
         '''
         # print(f_s.shape, f_t.shape)
-        self.label = self.label.to(f_s.device)
-        label_embedding = self.embed(self.label) # (B, K)
-        le_normed = label_embedding / torch.norm(label_embedding, dim=-1).unsqueeze(-1)
-        # cosine_similarity = torch.matmul()
-
-
-        K = f_s.shape[-1]
-
-
-        # KL divergence between teacher EBM and student EBM
-        
-        # loss = -(expectation_delta(f_t, f_s, self.y, T=self.T) / expectation(f_t, self.y, T=self.T) - torch.log(expectation(f_s, self.y, T=self.T)) + torch.log(expectation(f_t, self.y, T=self.T)))
-        # y = self.y.unsqueeze(0)
-        # # print(f_s.shape, y.shape)
-        # p_s = torch.log_softmax(torch.exp(f_s / self.T) * y / expectation(f_s, self.y, T=self.T).unsqueeze(1), -1)
-        # p_t = torch.softmax(torch.exp(f_t / self.T) * y / expectation(f_t, self.y, T=self.T).unsqueeze(1), -1)
-        
-        # loss = F.kl_div(p_s, p_t, size_average=False) * (self.T ** 2) / f_s.shape[0]
-        # if torch.isnan(p_s).any():
-        #     print('Error: Nan loss explored.')
-        #     print('p_s:'+str(torch.isnan(p_s)))
-        #     # print('p_t:'+str(torch.isnan(p_t)))
-        #     print('p_s_down: ')
-        #     print(torch.isnan(expectation(f_s, self.y, T=self.T).unsqueeze(1)))
-        #     print('f_s: ')
-        #     print(torch.isnan(f_s))
-        #     # print(torch.isnan(expectation(f_t, self.y, T=self.T).unsqueeze(1)))
-        #     exit(-1)
-
-        # print(p_t.shape)
-
-        # loss = loss.mean()
+        p_s = F.log_softmax(f_s/self.T, dim=1)
+        p_t = F.softmax(f_t/self.T, dim=1)
+        loss = F.kl_div(p_s, p_t, size_average=False) * (self.T**2) / y_s.shape[0]
         return loss
 
 

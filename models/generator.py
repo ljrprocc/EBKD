@@ -233,31 +233,42 @@ class CCG(Energy):
 
 
 class FF(nn.Module):
-    def __init__(self, depth=28, width=2, norm=None, dropout_rate=0.0, n_classes=10):
+    def __init__(self, model, n_classes=10):
         super(FF, self).__init__()
-        self.f = Wide_ResNet(depth, width, norm=norm, dropout_rate=dropout_rate)
+        self.f = model
+        # print(model)
         self.energy_output = nn.Linear(self.f.last_dim, 1)
         self.class_output = nn.Linear(self.f.last_dim, n_classes)
         self.n_cls = n_classes
+        # self.is_feat = is_feat
 
     def forward(self, x, y=None):
         penult_z = self.f(x)
         return self.energy_output(penult_z).squeeze()
 
-    def classify(self, x):
-        penult_z = self.f(x)
-        return self.class_output(penult_z).squeeze()
+    def classify(self, x, is_feat=False, preact=False):
+        if is_feat:
+            feats, penult_z = self.f(x, is_feat=is_feat, preact=preact, return_fc=False)
+            # print(self.f(x, is_feat=is_feat, preact=preact))
+            return feats, self.class_output(penult_z).squeeze()
+        else:
+            penult_z = self.f(x, is_feat=is_feat, preact=preact, return_fc=False)
+            return self.class_output(penult_z).squeeze()
 
 
 class CCF(FF):
-    def __init__(self, depth=28, width=2, norm=None, dropout_rate=0.0, n_classes=10):
-        super(CCF, self).__init__(depth, width, norm=norm, dropout_rate=dropout_rate, n_classes=n_classes)
+    def __init__(self, student_model, n_cls=10):
+        super(CCF, self).__init__(model=student_model, n_classes=n_cls)
+        # self.is_feat = is_feat
 
-    def forward(self, x, y=None):
-        logits = self.classify(x)
-        if y is None:
-            return logits.logsumexp(1)
+    def forward(self, x, y=None, is_feat=False, preact=False):
+        if is_feat:
+            feats, logits = self.classify(x, is_feat=is_feat, preact=preact)
         else:
-            return torch.gather(logits, 1, y[:, None])
+            logits = self.classify(x, is_feat=is_feat, preact=preact)
+        if y is None:
+            return logits.logsumexp(1) if not is_feat else feats, logits.logsumexp(1)
+        else:
+            return torch.gather(logits, 1, y[:, None]) if not is_feat else feats, logits.logsumexp(1)
 
 

@@ -197,24 +197,16 @@ class SampleBuffer:
 def sample_buffer(buffer, y, batch_size=128, p=0.95, device='cuda', num_classes=100):
     
     if len(buffer) < 1:
-        # print(init_random(batch_size, 3, 32, 32))
-        # print(torch.argmax(getDirichl(batch_size, num_classes=num_classes, sim_matrix=buffer.sim_mat, scale=0.1), 1))
         return (
             init_random(batch_size, 3, 32, 32).to(device),
             y,
-            # getDirichl(batch_size, num_classes=num_classes, sim_matrix=buffer.sim_mat, scale=0.1),
         )
 
-    # buffer_size = len(buffer) // num_classes
-    # idx = torch.randint(0, buffer_size, (batch_size,))
-    # idx = y.cpu() * buffer_size + idx
     n_replay = (np.random.rand(batch_size) < p).sum()
 
     replay_sample, replay_id = buffer.get(n_replay)
-    # random_sample = torch.rand(batch_size - n_replay, 3, 32, 32, device=device) * 2 - 1
     random_sample = init_random(batch_size - n_replay, 3, 32, 32).to(device)
     random_id = torch.randint(0, num_classes, (batch_size - n_replay,)).to(device)
-    # random_id = getDirichl(batch_size-n_replay, num_classes=num_classes, sim_matrix=buffer.sim_mat, scale=0.1)
 
     return (
         torch.cat([replay_sample, random_sample], 0),

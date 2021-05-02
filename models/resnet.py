@@ -126,6 +126,7 @@ class ResNet(nn.Module):
         self.layer3 = self._make_layer(block, num_filters[3], n, stride=2)
         self.avgpool = nn.AvgPool2d(8)
         self.fc = nn.Linear(num_filters[3] * block.expansion, num_classes)
+        self.last_dim = num_filters[3] * block.expansion
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -175,7 +176,7 @@ class ResNet(nn.Module):
 
         return [bn1, bn2, bn3]
 
-    def forward(self, x, is_feat=False, preact=False):
+    def forward(self, x, is_feat=False, preact=False, return_fc=True):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)  # 32x32
@@ -191,7 +192,8 @@ class ResNet(nn.Module):
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         f4 = x
-        x = self.fc(x)
+        if return_fc:
+            x = self.fc(x)
 
         if is_feat:
             if preact:
