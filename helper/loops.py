@@ -21,8 +21,12 @@ def train_vanilla(epoch, train_loader, model, criterion, optimizer, opt):
     top5 = AverageMeter()
 
     end = time.time()
-    for idx, (input, target) in enumerate(train_loader):
+    for idx, data in enumerate(train_loader):
         data_time.update(time.time() - end)
+        if opt.dataset == 'cifar100':
+            input, target = data
+        else:
+            input, target, idx = data
 
         input = input.float()
         if torch.cuda.is_available():
@@ -165,14 +169,14 @@ def train_distill(epoch, train_loader, module_list, criterion_list, optimizer, o
     """One epoch distillation"""
     # set modules as train()
     for module in module_list:
-        module.train()
+        module.module.train()
     # set teacher as eval()
-    module_list[-1].eval()
+    module_list[-1].module.eval()
 
     if opt.distill == 'abound':
-        module_list[1].eval()
+        module_list[1].module.eval()
     elif opt.distill == 'factor':
-        module_list[2].eval()
+        module_list[2].module.eval()
 
     criterion_cls = criterion_list[0]
     criterion_div = criterion_list[1]
@@ -300,12 +304,6 @@ def train_distill(epoch, train_loader, module_list, criterion_list, optimizer, o
         loss = opt.gamma * loss_cls + opt.alpha * loss_div + opt.beta * loss_kd
         acc1, acc5 = accuracy(logit_s, target, topk=(1, 5))
         # print(loss_cls, loss_div)
-        if top1.val > 98:
-            print(top1.val)
-            print('Too high Top-1 accuracy!')
-            print(torch.softmax(logit_s, 1))
-            print(target)
-            exit(-1)
         losses.update((loss).item(), input.size(0))
         top1.update(acc1[0], input.size(0))
         top5.update(acc5[0], input.size(0))
@@ -521,10 +519,10 @@ def train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer,
 
 
     # ===================backward=====================
-    optimizer[-1].zero_grad()
+    optimizer[-1].module.zero_grad()
     # loss_cls.backward(retain_graph=True)
     loss.backward()
-    optimizer[-1].step()
+    optimizer[-1].module.step()
     # print((model_G(input, target) - feat_real).mean())
 
     # ===================meters=====================

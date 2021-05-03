@@ -165,12 +165,14 @@ def get_dataloader_sample(dataset='imagenet', batch_size=128, num_workers=8, is_
 
     train_set = ImageFolderSample(train_folder, transform=train_transform, is_sample=is_sample, k=k)
     test_set = datasets.ImageFolder(test_folder, transform=test_transform)
+    train_sampler = torch.utils.data.distributed.DistributedSampler(train_set)
 
     train_loader = DataLoader(train_set,
                               batch_size=batch_size,
                               shuffle=True,
                               num_workers=num_workers,
-                              pin_memory=True)
+                              pin_memory=True,
+                              sampler=train_sampler)
     test_loader = DataLoader(test_set,
                              batch_size=batch_size,
                              shuffle=False,

@@ -10,4 +10,4 @@
 
 # python train_teacher.py --model vgg13
 
-CUDA_VISIBLE_DEVICES=3 python train_teacher.py --model ResNet50
+CUDA_VISIBLE_DEVICES=3,4 python train_teacher.py --model ResNet50 --dataset imagenet --batch_size 32

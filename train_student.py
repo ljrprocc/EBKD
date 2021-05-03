@@ -53,7 +53,7 @@ def parse_option():
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110',
                                  'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2',
                                  'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'ResNet50',
-                                 'MobileNetV2', 'ShuffleV1', 'ShuffleV2'])
+                                 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50', 'ResNet18'])
     parser.add_argument('--path_t', type=str, default=None, help='teacher model snapshot')
 
     # distillation
@@ -84,6 +84,9 @@ def parse_option():
     # parser.add_argument('--datafree', action='store_true')
     parser.add_argument('--energy', default='mcmc', type=str, help='Sampling method to update EBM.')
     parser.add_argument('--lmda_ebm', default=5, type=float, help='Hyperparameter for update EBM.')
+
+    # DDP options
+    parser.add_argument('--local_rank', default=-1, type=int, help='node rank for distributed training')
 
     opt = parser.parse_args()
 
@@ -131,9 +134,19 @@ def load_teacher(model_path, n_cls, opt):
     print('=====> loading teacher model.')
     model_t = get_teacher_name(model_path)
     model = model_dict[model_t](num_classes=n_cls)
-    model.load_state_dict(torch.load(model_path)['model'])
+    if opt.dataset == 'imagenet':
+        model = model_dict[model_t](num_classes=n_cls, pretrained=True)
+    else:
+        model.load_state_dict(torch.load(model_path)['model'])
     print('===> done.')
     return model
+
+def setup_ranks():
+    torch.distributed.init_process_group(backend="nccl")
+    local_rank = torch.distributed.get_rank()
+    torch.cuda.set_device(local_rank)
+    device = torch.device("cuda", local_rank)
+    return local_rank, device
 
 def main():
     best_acc = 0.
@@ -158,6 +171,7 @@ def main():
         n_cls = 1000
     else:
         raise NotImplementedError(opt.dataset)
+    # local_rank, device = setup_ranks()
 
     model_t = load_teacher(opt.path_t, n_cls, opt)
     model_s = model_dict[opt.model_s](num_classes=n_cls)
@@ -295,6 +309,9 @@ def main():
     module_list.append(model_t)
 
     if torch.cuda.is_available():
+        # module_list = torch.nn.ModuleList([m.to(device) for m in module_list])
+        # module_list = torch.nn.ModuleList([torch.nn.parallel.DistributedDataParallel(m, device_ids=[local_rank], output_device=local_rank) for m in module_list])
+        module_list = torch.nn.ModuleList([torch.nn.DataParallel(m) for m in module_list])
         module_list.cuda()
         criterion_list.cuda()
         cudnn.benchmark = True
@@ -303,7 +320,7 @@ def main():
     teacher_acc, _, _ = validate(val_loader, model_t, criterion_cls, opt, teacher_mode=True)
     print('teacher accuracy: ', teacher_acc)
     # noise = torch.randn(128,3,32,32)
-    buffer = SampleBuffer(net_T=opt.path_t)
+    # buffer = SampleBuffer(net_T=opt.path_t)
     # routine
     for epoch in range(1, opt.epochs + 1):
 
@@ -344,7 +361,7 @@ def main():
             print('==> Saving...')
             state = {
                 'epoch': epoch,
-                'model': model_s.state_dict(),
+                'model': model_s.module.state_dict(),
                 'accuracy': test_acc,
             }
             save_file = os.path.join(opt.save_folder, 'ckpt_epoch_{epoch}.pth'.format(epoch=epoch))
@@ -357,8 +374,8 @@ def main():
     # save model
     state = {
         'opt': opt,
-        'model': model_s.state_dict(),
-        'score': score.state_dict()
+        'model': model_s.module.state_dict(),
+        # 'score': score.state_dict()
     }
     save_file = os.path.join(opt.save_folder, '{}_last.pth'.format(opt.model_s))
     torch.save(state, save_file)
