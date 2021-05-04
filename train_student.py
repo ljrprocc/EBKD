@@ -361,7 +361,7 @@ def main():
             print('==> Saving...')
             state = {
                 'epoch': epoch,
-                'model': model_s.module.state_dict(),
+                'model': model_s.state_dict(),
                 'accuracy': test_acc,
             }
             save_file = os.path.join(opt.save_folder, 'ckpt_epoch_{epoch}.pth'.format(epoch=epoch))
