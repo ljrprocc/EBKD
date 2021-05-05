@@ -374,7 +374,7 @@ def main():
     # save model
     state = {
         'opt': opt,
-        'model': model_s.module.state_dict(),
+        'model': model_s.state_dict(),
         # 'score': score.state_dict()
     }
     save_file = os.path.join(opt.save_folder, '{}_last.pth'.format(opt.model_s))

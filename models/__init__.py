@@ -1,6 +1,6 @@
 from .resnet import resnet8, resnet14, resnet20, resnet32, resnet44, resnet56, resnet110, resnet8x4, resnet32x4
 # If you want to train resnet for ImageNet from sractch
-# from .resnetv2 import ResNet50, ResNet18
+from .resnetv2 import ResNet50, ResNet18
 from .pretrained_resnet import resnet50, resnet18
 # from torchvision.models.resnet import resnet50, resnet18
 from .wrn import wrn_16_1, wrn_16_2, wrn_40_1, wrn_40_2
@@ -22,6 +22,8 @@ model_dict = {
     'resnet32x4': resnet32x4,
     'ResNet50': resnet50,
     'ResNet18': resnet18,
+    'ResNet50cifar100': ResNet50,
+    'ResNet18cifar100': ResNet18,
     'wrn_16_1': wrn_16_1,
     'wrn_16_2': wrn_16_2,
     'wrn_40_1': wrn_40_1,
