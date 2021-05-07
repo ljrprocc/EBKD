@@ -74,6 +74,7 @@ class WideResNet(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.fc = nn.Linear(nChannels[3], num_classes)
         self.nChannels = nChannels[3]
+        self.last_dim = nChannels[3]
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):

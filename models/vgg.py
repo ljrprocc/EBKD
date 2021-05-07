@@ -38,6 +38,7 @@ class VGG(nn.Module):
         # self.pool4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
         self.classifier = nn.Linear(512, num_classes)
+        self.last_dim = 512
         self._initialize_weights()
 
     def get_feat_modules(self):

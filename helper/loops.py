@@ -393,156 +393,152 @@ def train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer,
         if opt.distill in ['abound']:
             preact = True
 
-    set_require_grad(model_t, False)
-    if opt.energy == 'mcmc':
-        neg_img_raw, neg_id = sample_buffer(buffer, y=target, batch_size=input.shape[0], num_classes=model_G.n_cls)
-        set_require_grad(model_s, False)
-        model_s.eval()
-        # print(neg_img_raw.shape)
-        x_k = torch.autograd.Variable(neg_img_raw, requires_grad=True)
-        neg_img = SGLD(model_s, neg_img=x_k, y=neg_id)
-        neg_img.clamp_(-1, 1)
-        # print(neg_img)
-        # print(neg_id)
-        buffer.push(neg_img, neg_id)
+        set_require_grad(model_t, False)
+        if opt.energy == 'mcmc':
+            neg_img_raw, neg_id = sample_buffer(buffer, y=target, batch_size=input.shape[0], num_classes=model_s.module.n_cls)
+            set_require_grad(model_s, False)
+            model_s.eval()
+            # print(neg_img_raw.shape)
+            x_k = torch.autograd.Variable(neg_img_raw, requires_grad=True)
+            neg_img = SGLD(model_s, neg_img=x_k, y=neg_id)
+            neg_img.clamp_(-1, 1)
+            # print(neg_img)
+            # print(neg_id)
+            buffer.push(neg_img, neg_id)
+            optimizer[-1].zero_grad()
+            neg_out = model_s(neg_img).mean()
+            pos_out = model_s(input).mean()
+            # print(pos_out, neg_out)
+            loss_ebm = -(pos_out - neg_out) + (pos_out ** 2 + neg_out ** 2)
+            loss_ebm = loss_ebm.mean()
+
+            # print(loss_clf.mean())
+            # lossa = loss_ebm + loss_clf  
+            loss_ebm.backward()
+            optimizer[-1].step()               
+        elif opt.energy == 'ssm':
+            pass
+        else:
+            raise NotImplementedError('Son of a bitch.')
+        set_require_grad(model_s, True)
+        
+        neg_img, neg_id = sample_buffer(buffer, y=target, batch_size=input.shape[0], p=1, num_classes=model_s.module.n_cls)
+        
+        feat_s, logit_s = model_s(neg_img, cls_mode=True, is_feat=True, preact=preact)
+        with torch.no_grad():
+            feat_t, logit_t = model_t(neg_img, cls_mode=True, is_feat=True, preact=preact)
+            feat_t = [f.detach() for f in feat_t]
+        loss_cls = criterion_cls(logit_s, neg_id)
+        loss_div = criterion_div(logit_s, logit_t)
+        # print(logit_s.shape)
+        # other kd beyond KL divergence
+        if opt.distill == 'kd':
+            loss_kd = 0
+        elif opt.distill == 'hint':
+            f_s = module_list[1](feat_s[opt.hint_layer])
+            f_t = feat_t[opt.hint_layer]
+            loss_kd = criterion_kd(f_s, f_t)
+        elif opt.distill == 'crd':
+            f_s = feat_s[-1]
+            f_t = feat_t[-1]
+            loss_kd = criterion_kd(f_s, f_t, index, contrast_idx)
+        elif opt.distill == 'attention':
+            g_s = feat_s[1:-1]
+            g_t = feat_t[1:-1]
+            loss_group = criterion_kd(g_s, g_t)
+            loss_kd = sum(loss_group)
+        elif opt.distill == 'nst':
+            g_s = feat_s[1:-1]
+            g_t = feat_t[1:-1]
+            loss_group = criterion_kd(g_s, g_t)
+            loss_kd = sum(loss_group)
+        elif opt.distill == 'similarity':
+            g_s = [feat_s[-2]]
+            g_t = [feat_t[-2]]
+            loss_group = criterion_kd(g_s, g_t)
+            loss_kd = sum(loss_group)
+        elif opt.distill == 'rkd':
+            f_s = feat_s[-1]
+            f_t = feat_t[-1]
+            loss_kd = criterion_kd(f_s, f_t)
+        elif opt.distill == 'pkt':
+            f_s = feat_s[-1]
+            f_t = feat_t[-1]
+            loss_kd = criterion_kd(f_s, f_t)
+        elif opt.distill == 'kdsvd':
+            g_s = feat_s[1:-1]
+            g_t = feat_t[1:-1]
+            loss_group = criterion_kd(g_s, g_t)
+            loss_kd = sum(loss_group)
+        elif opt.distill == 'correlation':
+            f_s = module_list[1](feat_s[-1])
+            f_t = module_list[2](feat_t[-1])
+            loss_kd = criterion_kd(f_s, f_t)
+        elif opt.distill == 'vid':
+            g_s = feat_s[1:-1]
+            g_t = feat_t[1:-1]
+            loss_group = [c(f_s, f_t) for f_s, f_t, c in zip(g_s, g_t, criterion_kd)]
+            loss_kd = sum(loss_group)
+        elif opt.distill == 'abound':
+            # can also add loss to this stage
+            loss_kd = 0
+        elif opt.distill == 'fsp':
+            # can also add loss to this stage
+            loss_kd = 0
+        elif opt.distill == 'factor':
+            factor_s = module_list[1](feat_s[-2])
+            factor_t = module_list[2](feat_t[-2], is_factor=True)
+            loss_kd = criterion_kd(factor_s, factor_t)
+        elif opt.distill == 'energy':
+            fs = feat_s[-1]
+            ft = feat_t[-1]
+            loss_ssm = criterion_kd(input, ft)
+            loss_kd = 0
+        elif opt.distill == 'ebkd':
+            fs = logit_s
+            ft = logit_t
+            loss_kd = criterion_kd(fs, ft)
+        else:
+            raise NotImplementedError(opt.distill)
+
+        loss = opt.gamma * loss_cls + opt.alpha * loss_div + opt.beta * loss_kd
+        # print(loss_cls, loss_div)
+        acc1, acc5 = accuracy(logit_s, neg_id, topk=(1, 5))
+        if (top1.val == 0 and top5.val >= 40):
+            # print(top1.val)
+            print('Too high Top-1 accuracy!')
+            print(torch.max(torch.softmax(logit_s, 1), 1))
+            print(logit_s)
+            exit(-1)
+        losses.update((loss).item(), input.size(0))
+        top1.update(acc1[0], input.size(0))
+        top5.update(acc5[0], input.size(0))
+        loss_ebms.update((loss_ebm).item(), input.size(0))
+
+
+        # ===================backward=====================
         optimizer[-1].zero_grad()
-        # pos_out_cls = model_s(input, cls_mode=True)
-        # print(pos_out_cls)
-        # loss_clf.backward()
-        # loss_ebm = 0.
-        neg_out = model_s(neg_img, neg_id).mean()
-        pos_out = model_s(input, target).mean()
-        # print(pos_out, neg_out)
-        loss_ebm = -(pos_out - neg_out) + (pos_out ** 2 + neg_out ** 2)
-        loss_ebm = loss_ebm.mean()
+        # loss_cls.backward(retain_graph=True)
+        loss.backward()
+        optimizer[-1].step()
+        # print((model_G(input, target) - feat_real).mean())
 
-        # print(loss_clf.mean())
-        # lossa = loss_ebm + loss_clf  
-        loss_ebm.backward()
-        optimizer[-1].step()               
-    elif opt.energy == 'ssm':
-        pass
-    else:
-        raise NotImplementedError('Son of a bitch.')
-    set_require_grad(model_s, True)
-    
-    neg_img, neg_id = sample_buffer(buffer, y=target, batch_size=input.shape[0], p=1, num_classes=model_G.n_cls)
-    
-    feat_s, logit_s = model_s(neg_img, cls_mode=True, is_feat=True, preact=preact)
-    with torch.no_grad():
-        feat_t, logit_t = model_t(neg_img, cls_mode=True, is_feat=True, preact=preact)
-        feat_t = [f.detach() for f in feat_t]
-    loss_cls = criterion_cls(logit_s, neg_id)
-    loss_div = criterion_div(logit_s, logit_t)
-    # print(logit_s.shape)
-    # other kd beyond KL divergence
-    if opt.distill == 'kd':
-        loss_kd = 0
-    elif opt.distill == 'hint':
-        f_s = module_list[1](feat_s[opt.hint_layer])
-        f_t = feat_t[opt.hint_layer]
-        loss_kd = criterion_kd(f_s, f_t)
-    elif opt.distill == 'crd':
-        f_s = feat_s[-1]
-        f_t = feat_t[-1]
-        loss_kd = criterion_kd(f_s, f_t, index, contrast_idx)
-    elif opt.distill == 'attention':
-        g_s = feat_s[1:-1]
-        g_t = feat_t[1:-1]
-        loss_group = criterion_kd(g_s, g_t)
-        loss_kd = sum(loss_group)
-    elif opt.distill == 'nst':
-        g_s = feat_s[1:-1]
-        g_t = feat_t[1:-1]
-        loss_group = criterion_kd(g_s, g_t)
-        loss_kd = sum(loss_group)
-    elif opt.distill == 'similarity':
-        g_s = [feat_s[-2]]
-        g_t = [feat_t[-2]]
-        loss_group = criterion_kd(g_s, g_t)
-        loss_kd = sum(loss_group)
-    elif opt.distill == 'rkd':
-        f_s = feat_s[-1]
-        f_t = feat_t[-1]
-        loss_kd = criterion_kd(f_s, f_t)
-    elif opt.distill == 'pkt':
-        f_s = feat_s[-1]
-        f_t = feat_t[-1]
-        loss_kd = criterion_kd(f_s, f_t)
-    elif opt.distill == 'kdsvd':
-        g_s = feat_s[1:-1]
-        g_t = feat_t[1:-1]
-        loss_group = criterion_kd(g_s, g_t)
-        loss_kd = sum(loss_group)
-    elif opt.distill == 'correlation':
-        f_s = module_list[1](feat_s[-1])
-        f_t = module_list[2](feat_t[-1])
-        loss_kd = criterion_kd(f_s, f_t)
-    elif opt.distill == 'vid':
-        g_s = feat_s[1:-1]
-        g_t = feat_t[1:-1]
-        loss_group = [c(f_s, f_t) for f_s, f_t, c in zip(g_s, g_t, criterion_kd)]
-        loss_kd = sum(loss_group)
-    elif opt.distill == 'abound':
-        # can also add loss to this stage
-        loss_kd = 0
-    elif opt.distill == 'fsp':
-        # can also add loss to this stage
-        loss_kd = 0
-    elif opt.distill == 'factor':
-        factor_s = module_list[1](feat_s[-2])
-        factor_t = module_list[2](feat_t[-2], is_factor=True)
-        loss_kd = criterion_kd(factor_s, factor_t)
-    elif opt.distill == 'energy':
-        fs = feat_s[-1]
-        ft = feat_t[-1]
-        loss_ssm = criterion_kd(input, ft)
-        loss_kd = 0
-    elif opt.distill == 'ebkd':
-        fs = logit_s
-        ft = logit_t
-        loss_kd = criterion_kd(fs, ft)
-    else:
-        raise NotImplementedError(opt.distill)
-
-    loss = opt.gamma * loss_cls + opt.alpha * loss_div + opt.beta * loss_kd
-    # print(loss_cls, loss_div)
-    acc1, acc5 = accuracy(logit_s, neg_id, topk=(1, 5))
-    if (top1.val == 0 and top5.val >= 40):
-        # print(top1.val)
-        print('Too high Top-1 accuracy!')
-        print(torch.max(torch.softmax(logit_s, 1), 1))
-        print(logit_s)
-        exit(-1)
-    losses.update((loss).item(), input.size(0))
-    top1.update(acc1[0], input.size(0))
-    top5.update(acc5[0], input.size(0))
-    loss_ebms.update((loss_ebm).item(), input.size(0))
-
-
-    # ===================backward=====================
-    optimizer[-1].module.zero_grad()
-    # loss_cls.backward(retain_graph=True)
-    loss.backward()
-    optimizer[-1].module.step()
-    # print((model_G(input, target) - feat_real).mean())
-
-    # ===================meters=====================
-    batch_time.update(time.time() - end)
-    end = time.time()
-    # exit(-1)
-        # print info
-    if idx % opt.print_freq == 0:
-        print('Epoch: [{0}][{1}/{2}]\t'
-                'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                'EBM Loss {loss_ebm.val:.4f} ({loss_ebm.avg:.4f})\t'
-                'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                'Acc@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
-                epoch, idx, len(train_loader), batch_time=batch_time,
-                data_time=data_time, loss=losses, loss_ebm=loss_ebms, top1=top1, top5=top5))
-        sys.stdout.flush()
+        # ===================meters=====================
+        batch_time.update(time.time() - end)
+        end = time.time()
+        # exit(-1)
+            # print info
+        if idx % opt.print_freq == 0:
+            print('Epoch: [{0}][{1}/{2}]\t'
+                    'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                    'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                    'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                    'EBM Loss {loss_ebm.val:.4f} ({loss_ebm.avg:.4f})\t'
+                    'Acc@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                    'Acc@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                    epoch, idx, len(train_loader), batch_time=batch_time,
+                    data_time=data_time, loss=losses, loss_ebm=loss_ebms, top1=top1, top5=top5))
+            sys.stdout.flush()
 
     print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
           .format(top1=top1, top5=top5))

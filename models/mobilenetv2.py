@@ -109,6 +109,7 @@ class MobileNetV2(nn.Module):
             # nn.Dropout(0.5),
             nn.Linear(self.last_channel, feature_dim),
         )
+        self.last_dim =self.last_channel
 
         H = input_size // (32//2)
         self.avgpool = nn.AvgPool2d(H, ceil_mode=True)

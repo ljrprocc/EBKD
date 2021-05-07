@@ -260,17 +260,24 @@ class CCF(FF):
         # self.is_feat = is_feat
 
     def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False):
+        #print(cls_mode, is_feat, preact, y)
+        
+        outs = super().forward(x, y=None, cls_mode=True, is_feat=is_feat, preact=preact)
+        if cls_mode:
+            return outs
+
         if is_feat:
-            feats, logits = super().forward(x, y=None, cls_mode=True, is_feat=is_feat, preact=preact)
-            if cls_mode:
-                return feats, logits
+            feats, logits = outs
+            if y is None:
+                return feats, logits.logsumexp(1)
+            else:
+                return feats, torch.gather(logits, 1, y[:, None])
         else:
-            logits = super().forward(x, y=None, cls_mode=True, is_feat=is_feat, preact=preact)
-            if cls_mode:
-                return logits
-        if y is None:
-            return logits.logsumexp(1) if not is_feat else feats, logits.logsumexp(1)
-        else:
-            return torch.gather(logits, 1, y[:, None]) if not is_feat else feats, logits.logsumexp(1)
+            # logits = super().forward(x=x, y=y, cls_mode=False)
+            logits = outs
+            if y is None:
+                return logits.logsumexp(1)
+            else:
+                return torch.gather(logits, 1, y[:, None])
 
 
