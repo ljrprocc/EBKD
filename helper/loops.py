@@ -221,11 +221,13 @@ def train_distill(epoch, train_loader, module_list, criterion_list, optimizer, o
         if opt.mode != 'energy':
             feat_s, logit_s = model_s(input, is_feat=True, preact=preact)
         else:
-            feat_s, logit_s = model_s.classify(input, is_feat=True, preact=preact)
+            feat_s, logit_s = model_s(input, cls_mode=True,is_feat=True, preact=preact)
         
         with torch.no_grad():
-            # if opt.mode != 'energy':
-            feat_t, logit_t = model_t(input, is_feat=True, preact=preact)
+            if opt.mode != 'energy':
+                feat_t, logit_t = model_t(input, is_feat=True, preact=preact)
+            else:
+                feat_t, logit_t = model_t(input, cls_mode=True,is_feat=True, preact=preact)
             feat_t = [f.detach() for f in feat_t]
 
         loss_cls = criterion_cls(logit_s, target)
@@ -365,7 +367,7 @@ def train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer,
     top5 = AverageMeter()
 
     end = time.time()
-    optimizer_ebm = optimizer[-2]
+    # optimizer_ebm = optimizer[-1]
     noise = torch.randn(128, 3, 32, 32)
     
 
@@ -398,13 +400,13 @@ def train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer,
         model_s.eval()
         # print(neg_img_raw.shape)
         x_k = torch.autograd.Variable(neg_img_raw, requires_grad=True)
-        neg_img = SGLD(model_G, neg_img=x_k, y=neg_id)
+        neg_img = SGLD(model_s, neg_img=x_k, y=neg_id)
         neg_img.clamp_(-1, 1)
         # print(neg_img)
         # print(neg_id)
         buffer.push(neg_img, neg_id)
-        optimizer_ebm.zero_grad()
-        pos_out_cls = model_s.classify(input)
+        optimizer[-1].zero_grad()
+        # pos_out_cls = model_s(input, cls_mode=True)
         # print(pos_out_cls)
         # loss_clf.backward()
         # loss_ebm = 0.
@@ -415,9 +417,9 @@ def train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer,
         loss_ebm = loss_ebm.mean()
 
         # print(loss_clf.mean())
-        lossa = loss_ebm + loss_clf  
-        lossa.backward()
-        optimizer_ebm.step()               
+        # lossa = loss_ebm + loss_clf  
+        loss_ebm.backward()
+        optimizer[-1].step()               
     elif opt.energy == 'ssm':
         pass
     else:
@@ -426,9 +428,9 @@ def train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer,
     
     neg_img, neg_id = sample_buffer(buffer, y=target, batch_size=input.shape[0], p=1, num_classes=model_G.n_cls)
     
-    feat_s, logit_s = model_s(neg_img, is_feat=True, preact=preact)
+    feat_s, logit_s = model_s(neg_img, cls_mode=True, is_feat=True, preact=preact)
     with torch.no_grad():
-        feat_t, logit_t = model_t(neg_img, is_feat=True, preact=preact)
+        feat_t, logit_t = model_t(neg_img, cls_mode=True, is_feat=True, preact=preact)
         feat_t = [f.detach() for f in feat_t]
     loss_cls = criterion_cls(logit_s, neg_id)
     loss_div = criterion_div(logit_s, logit_t)
@@ -515,7 +517,7 @@ def train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer,
     losses.update((loss).item(), input.size(0))
     top1.update(acc1[0], input.size(0))
     top5.update(acc5[0], input.size(0))
-    loss_ebms.update((lossa).item(), input.size(0))
+    loss_ebms.update((loss_ebm).item(), input.size(0))
 
 
     # ===================backward=====================
@@ -550,7 +552,7 @@ def train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer,
 
 
 
-def validate(val_loader, model, criterion, opt, teacher_mode=False):
+def validate(val_loader, model, criterion, opt):
     """validation"""
     batch_time = AverageMeter()
     losses = AverageMeter()
@@ -572,10 +574,10 @@ def validate(val_loader, model, criterion, opt, teacher_mode=False):
                 noise = noise.cuda()
 
             # compute output
-            if teacher_mode or opt.mode != 'energy':
+            if opt.mode != 'energy':
                 output = model(input)
             else:
-                output = model.classify(input)
+                output = model(input, cls_mode=True)
 
             # print(torch.argmax(output, 1), target)
             loss = criterion(output, target)

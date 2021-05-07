@@ -236,24 +236,22 @@ class FF(nn.Module):
     def __init__(self, model, n_classes=10):
         super(FF, self).__init__()
         self.f = model
-        # print(model)
         self.energy_output = nn.Linear(self.f.last_dim, 1)
-        self.class_output = nn.Linear(self.f.last_dim, n_classes)
         self.n_cls = n_classes
         # self.is_feat = is_feat
 
-    def forward(self, x, y=None):
-        penult_z = self.f(x)
-        return self.energy_output(penult_z).squeeze()
-
-    def classify(self, x, is_feat=False, preact=False):
-        if is_feat:
-            feats, penult_z = self.f(x, is_feat=is_feat, preact=preact, return_fc=False)
-            # print(self.f(x, is_feat=is_feat, preact=preact))
-            return feats, self.class_output(penult_z).squeeze()
+    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False):
+        if cls_mode:
+            if is_feat:
+                feats, penult_z = self.f(x, is_feat=is_feat, preact=preact)
+                # print(self.f(x, is_feat=is_feat, preact=preact))
+                return feats, penult_z
+            else:
+                penult_z = self.f(x, is_feat=is_feat, preact=preact)
+                return penult_z
         else:
-            penult_z = self.f(x, is_feat=is_feat, preact=preact, return_fc=False)
-            return self.class_output(penult_z).squeeze()
+            feats, penult_z = self.f(x, is_feat=True)
+            return self.energy_output(feats[-1]).squeeze()
 
 
 class CCF(FF):
@@ -261,11 +259,15 @@ class CCF(FF):
         super(CCF, self).__init__(model=student_model, n_classes=n_cls)
         # self.is_feat = is_feat
 
-    def forward(self, x, y=None, is_feat=False, preact=False):
+    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False):
         if is_feat:
-            feats, logits = self.classify(x, is_feat=is_feat, preact=preact)
+            feats, logits = super().forward(x, y=None, cls_mode=True, is_feat=is_feat, preact=preact)
+            if cls_mode:
+                return feats, logits
         else:
-            logits = self.classify(x, is_feat=is_feat, preact=preact)
+            logits = super().forward(x, y=None, cls_mode=True, is_feat=is_feat, preact=preact)
+            if cls_mode:
+                return logits
         if y is None:
             return logits.logsumexp(1) if not is_feat else feats, logits.logsumexp(1)
         else:

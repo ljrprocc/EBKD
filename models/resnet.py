@@ -176,7 +176,7 @@ class ResNet(nn.Module):
 
         return [bn1, bn2, bn3]
 
-    def forward(self, x, is_feat=False, preact=False, return_fc=True):
+    def forward(self, x, is_feat=False, preact=False):
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)  # 32x32
@@ -192,8 +192,7 @@ class ResNet(nn.Module):
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         f4 = x
-        if return_fc:
-            x = self.fc(x)
+        x = self.fc(x)
 
         if is_feat:
             if preact:

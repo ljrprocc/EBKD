@@ -177,7 +177,7 @@ def main():
     model_s = model_dict[opt.model_s](num_classes=n_cls)
     if opt.mode == 'energy':
         model_s = model_dict['Score'](student_model=model_s, n_cls=n_cls)
-        # model_t = model_dict['Score'](student_model=model_t, n_cls=n_cls)
+        model_t = model_dict['Score'](student_model=model_t, n_cls=n_cls)
 
     data = torch.randn(2, 3, 32, 32)
     model_t.eval()
@@ -317,7 +317,7 @@ def main():
         cudnn.benchmark = True
 
     # validate teacher accuracy
-    teacher_acc, _, _ = validate(val_loader, model_t, criterion_cls, opt, teacher_mode=True)
+    teacher_acc, _, _ = validate(val_loader, model_t, criterion_cls, opt)
     print('teacher accuracy: ', teacher_acc)
     # noise = torch.randn(128,3,32,32)
     # buffer = SampleBuffer(net_T=opt.path_t)
@@ -329,6 +329,7 @@ def main():
 
         time1 = time.time()
         if opt.datafree:
+            buffer = SampleBuffer(net_T=opt.path_t)
             train_acc, train_loss = train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer_list, opt, buffer)
         else:
             train_acc, train_loss = train_distill(epoch, train_loader, module_list, criterion_list, optimizer_list, opt)
