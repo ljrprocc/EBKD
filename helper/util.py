@@ -72,8 +72,9 @@ def save_img(g, save_path, label):
     cv2.imwrite(save_path, img)
 
 def set_require_grad(net, flag):
-    for p in net.parameters():
-        p.requires_grad = flag
+    for p in net.named_parameters():
+        if p[0].split('.')[0] != 'energy_output':
+            p[1].requires_grad = flag
 
 def init_random(s1, s2, s3, s4):
     return torch.FloatTensor(s1, s2, s3, s4).uniform_(-1, 1)
