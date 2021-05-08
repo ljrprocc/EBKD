@@ -236,7 +236,13 @@ class FF(nn.Module):
     def __init__(self, model, n_classes=10):
         super(FF, self).__init__()
         self.f = model
-        self.energy_output = nn.Linear(self.f.last_dim, 1)
+        self.energy_output = nn.Sequential(
+            nn.Linear(self.f.last_dim, 256),
+            nn.LeakyReLU(0.2),
+            nn.Linear(256, 64),
+            nn.LeakyReLU(0.2),
+            nn.Linear(64, 1)
+        )
         self.n_cls = n_classes
         # self.is_feat = is_feat
 

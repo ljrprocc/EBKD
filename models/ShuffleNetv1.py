@@ -67,6 +67,7 @@ class ShuffleNet(nn.Module):
         self.layer2 = self._make_layer(out_planes[1], num_blocks[1], groups)
         self.layer3 = self._make_layer(out_planes[2], num_blocks[2], groups)
         self.linear = nn.Linear(out_planes[2], num_classes)
+        self.las_dim = out_planes[2]
 
     def _make_layer(self, out_planes, num_blocks, groups):
         layers = []
