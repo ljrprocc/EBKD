@@ -398,28 +398,32 @@ def train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer,
         if opt.energy == 'mcmc':
             neg_img_raw, neg_id = sample_buffer(buffer, y=target, batch_size=input.shape[0], num_classes=model_s.module.n_cls)
             set_require_grad(model_s, False)
-            model_s.eval()
+            model_t.eval()
             # print(neg_img_raw.shape)
             x_k = torch.autograd.Variable(neg_img_raw, requires_grad=True)
             neg_img = SGLD(model_t, neg_img=x_k, y=neg_id)
             neg_img.clamp_(-1, 1)
             # print(neg_img)
-            # print(neg_id)
+            # print(neg_id) 
             buffer.push(neg_img, neg_id)
             optimizer[-1].zero_grad()
             neg_out_nonmean = model_t(neg_img, neg_id)
             neg_out = neg_out_nonmean.mean()
             pos_out = model_t(input, target).mean()
             # print(pos_out, neg_out)
-            loss_ebm = -(pos_out - neg_out) + (pos_out ** 2 + neg_out ** 2)
+            loss_ebm = -(pos_out - neg_out)
             loss_ebm = loss_ebm.mean()
             with torch.no_grad():
                 logit_out = model_t(x=neg_img, cls_mode=True)
             # Model -E_{(x-, y-)~p_{\theta}}[L_cls(y-, p_{\phi_t}(x-))]
-            loss_cls_logit = -(torch.eye(n_cls)[neg_id] * logit_out).sum(1)
+            loss_cls_logit = -(torch.eye(n_cls)[neg_id].to(input.device) * torch.log_softmax(logit_out, 1)).sum(1)
             loss_cls = loss_cls_logit.mean()
             # Model backward teacher loss function
             loss_b = loss_cls * neg_out - (loss_cls_logit * neg_out_nonmean).mean()
+            # print(loss_cls, criterion_cls(logit_out, neg_id))
+            # print(loss_b, loss_ebm)
+            loss_ebm += opt.lmda_ebm * loss_b
+            
 
             # print(loss_clf.mean())
             # lossa = loss_ebm + loss_clf  
@@ -430,7 +434,7 @@ def train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer,
         else:
             raise NotImplementedError('Son of a bitch.')
         set_require_grad(model_s, True)
-        
+        model_t.eval()
         neg_img, neg_id = sample_buffer(buffer, y=target, batch_size=input.shape[0], p=1, num_classes=model_s.module.n_cls)
         
         feat_s, logit_s = model_s(neg_img, cls_mode=True, is_feat=True, preact=preact)

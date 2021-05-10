@@ -83,7 +83,7 @@ def parse_option():
     parser.add_argument('--D_step', default=1, type=int, help='Iterations of updation for distillation model.')
     # parser.add_argument('--datafree', action='store_true')
     parser.add_argument('--energy', default='mcmc', type=str, help='Sampling method to update EBM.')
-    parser.add_argument('--lmda_ebm', default=5, type=float, help='Hyperparameter for update EBM.')
+    parser.add_argument('--lmda_ebm', default=1000, type=float, help='Hyperparameter for update EBM.')
 
     # DDP options
     parser.add_argument('--local_rank', default=-1, type=int, help='node rank for distributed training')
