@@ -233,23 +233,26 @@ class CCG(Energy):
 
 
 class FF(nn.Module):
-    def __init__(self, model, n_classes=10):
+    def __init__(self, model, n_cls=10):
         super(FF, self).__init__()
         self.f = model
-        self.energy_output = nn.Sequential(
+        self.mlp_cls_head = nn.Sequential(
             nn.Linear(self.f.last_dim, 256),
             nn.LeakyReLU(0.2),
             nn.Linear(256, 64),
             nn.LeakyReLU(0.2),
-            nn.Linear(64, 1)
         )
-        self.n_cls = n_classes
+        self.cls_head = nn.Linear(64, n_cls)
+        self.energy_output = nn.Linear(64, 1)
+        # self.energy_output = nn.Linear(self.f.last_dim, 1)
+        self.n_cls = n_cls
         # self.is_feat = is_feat
 
-    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False):
+    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False, return_feat=False):
         if cls_mode:
             if is_feat:
                 feats, penult_z = self.f(x, is_feat=is_feat, preact=preact)
+                # print(penult_z.requires_grad)
                 # print(self.f(x, is_feat=is_feat, preact=preact))
                 return feats, penult_z
             else:
@@ -257,33 +260,54 @@ class FF(nn.Module):
                 return penult_z
         else:
             feats, penult_z = self.f(x, is_feat=True)
-            return self.energy_output(feats[-1]).squeeze()
+            # print(feats[-1].requires_grad)
+            if not feats[-1].requires_grad:
+                feat = feats[-1].detach()
+            else:
+                feat = feats[-1]
+            ori_feat = feat
+            feat = self.mlp_cls_head(ori_feat)
+            if return_logit:
+                return ori_feat, self.energy_output(feat).squeeze()
+            return self.energy_output(feat).squeeze()
 
 
 class CCF(FF):
-    def __init__(self, student_model, n_cls=10):
-        super(CCF, self).__init__(model=student_model, n_classes=n_cls)
+    def __init__(self, model, n_cls=10):
+        super(CCF, self).__init__(model=model, n_cls=n_cls)
         # self.is_feat = is_feat
 
     def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False):
         #print(cls_mode, is_feat, preact, y)
         
-        outs = super().forward(x, y=None, cls_mode=True, is_feat=is_feat, preact=preact)
-        if cls_mode:
-            return outs
+        feats, logits = super().forward(x, y=None, cls_mode=True, is_feat=True, preact=preact)
+        feat = feats[-1]
+        # if not feats[-1].requires_grad:
+        #     feat = feats[-1].detach()
+        # else:
+        #     feat = feats[-1]
+        # if cls_mode:
+        #     return outs if not is_feat else feats, outs
 
-        if is_feat:
-            feats, logits = outs
-            if y is None:
-                return feats, logits.logsumexp(1)
+        feat = self.mlp_cls_head(feat)
+        feat = self.cls_head(feat)
+        if cls_mode:
+            # print(is_feat)
+            if not is_feat:
+                return feat
             else:
-                return feats, torch.gather(logits, 1, y[:, None])
+                return feats, feat
+        if is_feat:
+            if y is None:
+                return feats, feat.logsumexp(1)
+            else:
+                return feats, torch.gather(feat, 1, y[:, None])
         else:
             # logits = super().forward(x=x, y=y, cls_mode=False)
-            logits = outs
+            # print(logits.requires_grad)
             if y is None:
-                return logits.logsumexp(1)
+                return feat.logsumexp(1)
             else:
-                return torch.gather(logits, 1, y[:, None])
+                return torch.gather(feat, 1, y[:, None])
 
 

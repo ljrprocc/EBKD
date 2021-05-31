@@ -1,3 +1,4 @@
+
 from __future__ import absolute_import
 
 '''Resnet for cifar dataset.

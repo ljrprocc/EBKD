@@ -7,8 +7,8 @@ if __name__ == "__main__":
     teas = sys.argv[2].split(',')
     for stu, tea in zip(stus, teas):
         scores = []
-        for i in range(10):
-            pths = torch.load('save/student_model/S:{}_T:{}_cifar100_hint_r:1_a:0.0_b:100.0_{}_ebm/{}_best.pth'.format(stu, tea, i, stu))
+        for i in range(7):
+            pths = torch.load('save/student_model/S:{}_T:{}_cifar100_attention_r:1_a:0.0_b:1000.0_{}_ebm/{}_best.pth'.format(stu, tea, i, stu))
             acc = pths['best_acc']
             scores.append(acc.item())
         scores = np.asarray(scores)

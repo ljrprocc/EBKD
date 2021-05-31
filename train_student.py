@@ -36,7 +36,7 @@ def parse_option():
     parser.add_argument('--batch_size', type=int, default=64, help='batch_size')
     parser.add_argument('--num_workers', type=int, default=8, help='num of workers to use')
     parser.add_argument('--epochs', type=int, default=240, help='number of training epochs')
-    parser.add_argument('--init_epochs', type=int, default=30, help='init training for two-stage methods')
+    parser.add_argument('--init_epochs', type=int, default=0, help='init training for two-stage methods and resume')
 
     # optimization
     parser.add_argument('--learning_rate', type=float, default=0.05, help='learning rate')
@@ -83,7 +83,7 @@ def parse_option():
     parser.add_argument('--D_step', default=1, type=int, help='Iterations of updation for distillation model.')
     # parser.add_argument('--datafree', action='store_true')
     parser.add_argument('--energy', default='mcmc', type=str, help='Sampling method to update EBM.')
-    parser.add_argument('--lmda_ebm', default=1000, type=float, help='Hyperparameter for update EBM.')
+    parser.add_argument('--lmda_ebm', default=0.7, type=float, help='Hyperparameter for update EBM.')
 
     # DDP options
     parser.add_argument('--local_rank', default=-1, type=int, help='node rank for distributed training')
@@ -142,6 +142,7 @@ def load_teacher(model_path, n_cls, opt):
     return model
 
 def setup_ranks():
+    os.environ['OPM_NUM_THREADS'] = '1'
     torch.distributed.init_process_group(backend="nccl")
     local_rank = torch.distributed.get_rank()
     torch.cuda.set_device(local_rank)
@@ -171,13 +172,24 @@ def main():
         n_cls = 1000
     else:
         raise NotImplementedError(opt.dataset)
-    # local_rank, device = setup_ranks()
+
+    use_ddp = opt.dataset == 'imagenet'
+    if use_ddp:
+        local_rank, device = setup_ranks()
 
     model_t = load_teacher(opt.path_t, n_cls, opt)
     model_s = model_dict[opt.model_s](num_classes=n_cls)
     if opt.mode == 'energy':
-        model_s = model_dict['Score'](student_model=model_s, n_cls=n_cls)
-        model_t = model_dict['Score'](student_model=model_t, n_cls=n_cls)
+        model_s = model_dict['Score'](model=model_s, n_cls=n_cls)
+        model_t = model_dict['Score'](model=model_t, n_cls=n_cls)
+
+    if opt.init_epochs > 0:
+        print('==> Loading resumed epochs..')
+        save_file = os.path.join(opt.save_folder, '{}_best.pth'.format(opt.model_s))
+        pth = torch.load(save_file)
+        opt.init_epochs = pth['epoch']
+        model_s.load_state_dict(pth['model'])
+        print('Done.')
 
     data = torch.randn(2, 3, 32, 32)
     model_t.eval()
@@ -299,9 +311,9 @@ def main():
                           lr=opt.learning_rate,
                           momentum=opt.momentum,
                           weight_decay=opt.weight_decay)
-    # if opt.mode == 'energy':
-    #     opt_G = optim.Adam(score.parameters(),lr=0.0001, betas=(0.5, 0.999), weight_decay=opt.weight_decay)
-    #     optimizer_list.append(opt_G)
+    if opt.mode == 'energy':
+        opt_G = optim.Adam(model_t.energy_output.parameters(),lr=0.01, betas=(0.5, 0.999), weight_decay=opt.weight_decay)
+        optimizer_list.append(opt_G)
     
     optimizer_list.append(optimizer)
 
@@ -309,27 +321,32 @@ def main():
     module_list.append(model_t)
 
     if torch.cuda.is_available():
-        # module_list = torch.nn.ModuleList([m.to(device) for m in module_list])
-        # module_list = torch.nn.ModuleList([torch.nn.parallel.DistributedDataParallel(m, device_ids=[local_rank], output_device=local_rank) for m in module_list])
-        module_list = torch.nn.ModuleList([torch.nn.DataParallel(m) for m in module_list])
-        module_list.cuda()
-        criterion_list.cuda()
+        if use_ddp:
+            module_list = torch.nn.ModuleList([m.to(device) for m in module_list])
+            module_list = torch.nn.ModuleList([torch.nn.parallel.DistributedDataParallel(m, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True) for m in module_list])
+            criterion_list.to(local_rank)
+        else:
+            module_list = torch.nn.ModuleList([torch.nn.DataParallel(m) for m in module_list])
+            module_list.cuda()
+            criterion_list.cuda()
         cudnn.benchmark = True
 
     # validate teacher accuracy
     teacher_acc, _, _ = validate(val_loader, model_t, criterion_cls, opt)
     print('teacher accuracy: ', teacher_acc)
+    if opt.datafree:
+        buffer = SampleBuffer(net_T=opt.path_t)
     # noise = torch.randn(128,3,32,32)
     # buffer = SampleBuffer(net_T=opt.path_t)
     # routine
-    for epoch in range(1, opt.epochs + 1):
+    for epoch in range(opt.init_epochs + 1, opt.epochs + 1):
 
         adjust_learning_rate(epoch, opt, optimizer)
         print("==> training...")
 
         time1 = time.time()
         if opt.datafree:
-            buffer = SampleBuffer(net_T=opt.path_t)
+            # buffer = SampleBuffer(net_T=opt.path_t)
             train_acc, train_loss = train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer_list, opt, buffer)
         else:
             train_acc, train_loss = train_distill(epoch, train_loader, module_list, criterion_list, optimizer_list, opt)
@@ -355,7 +372,8 @@ def main():
             }
             save_file = os.path.join(opt.save_folder, '{}_best.pth'.format(opt.model_s))
             print('saving the best model!')
-            torch.save(state, save_file)
+            if (not use_ddp) or torch.distributed.get_rank() == 0:
+                torch.save(state, save_file)
 
         # regular saving
         if epoch % opt.save_freq == 0:
@@ -366,7 +384,8 @@ def main():
                 'accuracy': test_acc,
             }
             save_file = os.path.join(opt.save_folder, 'ckpt_epoch_{epoch}.pth'.format(epoch=epoch))
-            torch.save(state, save_file)
+            if (not use_ddp) or torch.distributed.get_rank() == 0:
+                torch.save(state, save_file)
 
     # This best accuracy is only for printing purpose.
     # The results reported in the paper/README is from the last epoch. 
@@ -379,7 +398,8 @@ def main():
         # 'score': score.state_dict()
     }
     save_file = os.path.join(opt.save_folder, '{}_last.pth'.format(opt.model_s))
-    torch.save(state, save_file)
+    if (not use_ddp) or torch.distributed.get_rank() == 0:
+        torch.save(state, save_file)
 
 
 if __name__ == '__main__':

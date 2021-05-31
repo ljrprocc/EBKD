@@ -10,4 +10,4 @@
 
 # python train_teacher.py --model vgg13
 
-CUDA_VISIBLE_DEVICES=1 python train_teacher.py --model ResNet50 --capcitiy 20000
+CUDA_VISIBLE_DEVICES=1 python train_ebm.py --model resnet32x4 --capcitiy 20000 --path_t ./save/models/resnet32x4_vanilla/ckpt_epoch_240.pth --steps 20 --save_freq 5 --epochs 70 --lr_decay_epochs 30,40 --plot_uncond --learning_rate 0.0001

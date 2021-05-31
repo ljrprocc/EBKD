@@ -2,10 +2,12 @@ from __future__ import print_function
 
 import os
 import socket
+import torch
 import numpy as np
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 from PIL import Image
+from .datasubset import get_dataloaders_and_datasets
 
 """
 mean = {
@@ -58,7 +60,7 @@ class CIFAR100Instance(datasets.CIFAR100):
         return img, target, index
 
 
-def get_cifar100_dataloaders(batch_size=128, num_workers=8, is_instance=False):
+def get_cifar100_dataloaders(opt, batch_size=128, num_workers=8, is_instance=False, use_subdataset=False):
     """
     cifar 100
     """
@@ -68,11 +70,13 @@ def get_cifar100_dataloaders(batch_size=128, num_workers=8, is_instance=False):
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        lambda x: x + 0.03 * torch.randn_like(x)
     ])
     test_transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        lambda x: x + 0.03 * torch.randn_like(x)
     ])
 
     if is_instance:
@@ -99,7 +103,10 @@ def get_cifar100_dataloaders(batch_size=128, num_workers=8, is_instance=False):
                              batch_size=int(batch_size/2),
                              shuffle=False,
                              num_workers=int(num_workers/2))
-
+    if use_subdataset:
+        dload_train, dload_train_labeled, dload_valid, dload_test = get_dataloaders_and_datasets(train_set, test_set, opt)
+        train_loader = (dload_train, dload_train_labeled)
+        test_loader = (dload_valid, dload_test)
     if is_instance:
         return train_loader, test_loader, n_data
     else:
@@ -183,8 +190,8 @@ class CIFAR100InstanceSample(datasets.CIFAR100):
             return img, target, index, sample_idx
 
 
-def get_cifar100_dataloaders_sample(batch_size=128, num_workers=8, k=4096, mode='exact',
-                                    is_sample=True, percent=1.0):
+def get_cifar100_dataloaders_sample(opt, batch_size=128, num_workers=8, k=4096, mode='exact',
+                                    is_sample=True, percent=1.0, use_subdataset=False):
     """
     cifar 100
     """
@@ -194,11 +201,13 @@ def get_cifar100_dataloaders_sample(batch_size=128, num_workers=8, k=4096, mode=
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        lambda x: x + 0.03 * torch.randn_like(x)
     ])
     test_transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        lambda x: x + 0.03 * torch.randn_like(x)
     ])
 
     train_set = CIFAR100InstanceSample(root=data_folder,
@@ -223,5 +232,9 @@ def get_cifar100_dataloaders_sample(batch_size=128, num_workers=8, k=4096, mode=
                              batch_size=int(batch_size/2),
                              shuffle=False,
                              num_workers=int(num_workers/2))
+    if use_subdataset:
+        dload_train, dload_train_labeled, dload_valid, dload_test = get_dataloaders_and_datasets(train_set, test_set, opt)
+        train_loader = (dload_train, dload_train_labeled)
+        test_loader = (dload_valid, dload_test)
 
     return train_loader, test_loader, n_data

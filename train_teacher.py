@@ -218,7 +218,7 @@ def main():
             
 
             if epoch % opt.save_freq == 0:
-                # np.savez(opt.save_folder, 'res_epoch_{epoch}.npz'.format(epoch=epoch), sample=sample, class_id=class_id)
+                np.savez(opt.save_folder, 'res_epoch_{epoch}.npz'.format(epoch=epoch), sample=sample, class_id=class_id)
                 state = {
                     'opt': opt,
                     'model': model.state_dict(),
