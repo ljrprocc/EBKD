@@ -21,18 +21,35 @@ def conv3x3(in_planes, out_planes, stride=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                      padding=1, bias=False)
 
+class Identity(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+    def forward(self, x):
+        return x
+
+def get_norm(norm='none'):
+    if norm == 'batch':
+        norm_layer = nn.BatchNorm2d
+    elif norm  == 'instance':
+        norm_layer = nn.InstanceNorm2d
+    elif norm == 'none':
+        norm_layer = Identity
+    else:
+        raise NotImplementedError('Son of a total bitch.')
+    return norm_layer
 
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, is_last=False):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, is_last=False, norm='none'):
         super(BasicBlock, self).__init__()
+        norm_layer = get_norm(norm)
         self.is_last = is_last
         self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = nn.BatchNorm2d(planes)
+        self.bn1 = norm_layer(planes)
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = conv3x3(planes, planes)
-        self.bn2 = nn.BatchNorm2d(planes)
+        self.bn2 = norm_layer(planes)
         self.downsample = downsample
         self.stride = stride
 
@@ -103,8 +120,9 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, depth, num_filters, block_name='BasicBlock', num_classes=10):
+    def __init__(self, depth, num_filters, block_name='BasicBlock', num_classes=10, norm='none'):
         super(ResNet, self).__init__()
+        norm_layer = get_norm(norm)
         # Model type specifies number of layers for CIFAR-10 model
         if block_name.lower() == 'basicblock':
             assert (depth - 2) % 6 == 0, 'When use basicblock, depth should be 6n+2, e.g. 20, 32, 44, 56, 110, 1202'
@@ -120,11 +138,12 @@ class ResNet(nn.Module):
         self.inplanes = num_filters[0]
         self.conv1 = nn.Conv2d(3, num_filters[0], kernel_size=3, padding=1,
                                bias=False)
-        self.bn1 = nn.BatchNorm2d(num_filters[0])
+        self.bn1 = norm_layer(num_filters[0])
         self.relu = nn.ReLU(inplace=True)
-        self.layer1 = self._make_layer(block, num_filters[1], n)
-        self.layer2 = self._make_layer(block, num_filters[2], n, stride=2)
-        self.layer3 = self._make_layer(block, num_filters[3], n, stride=2)
+        # print(block)
+        self.layer1 = self._make_layer(block, num_filters[1], n, stride=1, norm=norm)
+        self.layer2 = self._make_layer(block, num_filters[2], n, stride=2, norm=norm)
+        self.layer3 = self._make_layer(block, num_filters[3], n, stride=2, norm=norm)
         self.avgpool = nn.AvgPool2d(8)
         self.fc = nn.Linear(num_filters[3] * block.expansion, num_classes)
         self.last_dim = num_filters[3] * block.expansion
@@ -136,20 +155,22 @@ class ResNet(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-    def _make_layer(self, block, planes, blocks, stride=1):
+    def _make_layer(self, block, planes, blocks, stride=1, norm='none'):
+        norm_layer = get_norm(norm)
+        # print(block.expansion)
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
                 nn.Conv2d(self.inplanes, planes * block.expansion,
                           kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(planes * block.expansion),
+                norm_layer(planes * block.expansion),
             )
 
         layers = list([])
-        layers.append(block(self.inplanes, planes, stride, downsample, is_last=(blocks == 1)))
+        layers.append(block(self.inplanes, planes, stride, downsample, is_last=(blocks == 1), norm=norm))
         self.inplanes = planes * block.expansion
         for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes, is_last=(i == blocks-1)))
+            layers.append(block(self.inplanes, planes, is_last=(i == blocks-1), norm=norm))
 
         return nn.Sequential(*layers)
 

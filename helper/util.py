@@ -38,16 +38,6 @@ class TVLoss(torch.nn.Module):
         loss = self.tv_weight * (h_variance + w_variance)
         return loss
 
-def get_image_prior_losses(inputs):
-    diff1 = inputs[:, :, :, :-1] - inputs[:, :, :, 1:]
-    diff2 = inputs[:, :, :-1, :] - inputs[:, :, 1:, :]
-    diff3 = inputs[:, :, 1:, :-1] - inputs[:, :, :-1, 1:]
-    diff4 = inputs[:, :, :-1, :-1] - inputs[:, :, 1:, 1:]
-
-    loss_var_l2 = torch.norm(diff1) + torch.norm(diff2) + torch.norm(diff3) + torch.norm(diff4)
-
-    return loss_var_l2
-
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""

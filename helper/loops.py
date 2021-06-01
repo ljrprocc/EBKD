@@ -10,7 +10,7 @@ import torchvision.utils as vutils
 from math import sqrt
  
 from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras
-from .util_gen import get_replay_buffer, update_theta
+from .util_gen import get_replay_buffer, update_theta, ssm_sample
 from .util_gen import get_sample_q
 
 
@@ -76,9 +76,11 @@ def train_vanilla(epoch, train_loader, model, criterion, optimizer, opt):
     return top1.avg, losses.avg
 
 
-def train_generator(epoch, train_loader, model, criterion, optimizer, opt, buffer):
+def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer):
     '''One epoch for training generator with teacher'''
+    model_t, model = model_list
     model.train()
+    model_t.eval()
     # module_list[0].eval()
     # model = module_list[-1]
     batch_time = AverageMeter()
@@ -90,7 +92,7 @@ def train_generator(epoch, train_loader, model, criterion, optimizer, opt, buffe
     fqxs = AverageMeter()
     fpxys = AverageMeter()
     fqxys = AverageMeter()
-    noise = torch.randn(128, 3, 32, 32)
+    # noise = torch.randn(128, 3, 32, 32)
     train_loader, train_labeled_loader = train_loader
     # criterion is tv loss
     plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
@@ -98,6 +100,10 @@ def train_generator(epoch, train_loader, model, criterion, optimizer, opt, buffe
     end = time.time()
     sample_q = get_sample_q(opt)
     for idx, (input, target) in enumerate(train_loader):
+        if idx <= opt.warmup_iters:
+            lr = opt.learning_rate * idx / float(opt.warmup_iters)
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
         data_time.update(time.time() - end)
         x_lab, y_lab = train_labeled_loader.__next__()
         x_lab, y_lab = x_lab.cuda(), y_lab.cuda()
@@ -107,35 +113,40 @@ def train_generator(epoch, train_loader, model, criterion, optimizer, opt, buffe
         if torch.cuda.is_available():
             input = input.cuda()
             target = target.cuda()
-            noise = noise.cuda()
+            # noise = noise.cuda()
 
         # ===================forward=====================
         # input_fake, [mu, logvar] = G(noise, target, return_feat=True)
         # output = model(input_fake)
         loss_ebm = 0
+        optimizer.zero_grad()
+        model.zero_grad()
         if opt.energy == 'mcmc':
-            optimizer.zero_grad()
-            model.zero_grad()
-            # print_trainable_paras(model)
-            # exit(-1)
-            loss_ebm, cache_p_x, cache_p_y = update_theta(opt, buffer, model, input, x_lab, y_lab)
-            optimizer.step()               
+            loss_ebm, cache_p_x, cache_p_y = update_theta(opt, buffer, model, input, x_lab, y_lab)    
         elif opt.energy == 'ssm':
-            pass
+            loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
         else:
             raise NotImplementedError('Not implemented.')
-
+        optimizer.step()
         losses.update(loss_ebm, input.size(0))
         batch_time.update(time.time() - end)
         end = time.time()
-        if opt.lmda_p_x > 0:
-            fpx, fqx = cache_p_x
-            fpxs.update(fpx, input.size(0))
-            fqxs.update(fqx, input.size(0))
-        if opt.lmda_p_x_y > 0:
-            fpxy, fqxy = cache_p_y
-            fpxys.update(fpxy, input.size(0))
-            fqxys.update(fqxy, input.size(0))
+        if opt.energy == 'mcmc':
+            if opt.lmda_p_x > 0:
+                fpx, fqx = cache_p_x
+                fpxs.update(fpx, input.size(0))
+                fqxs.update(fqx, input.size(0))
+            if opt.lmda_p_x_y > 0:
+                fpxy, fqxy = cache_p_y
+                fpxys.update(fpxy, input.size(0))
+                fqxys.update(fqxy, input.size(0))
+        elif opt.energy == 'ssm':
+            if opt.lmda_p_x > 0:
+                # print(score_x.shape)
+                fqxs.update(score_x.mean(), input.size(0))
+            if opt.lmda_p_x_y > 0:
+                fqxys.update(score_xy.mean(), input.size(0))
+        
 
         # tensorboard logger
         pass
@@ -144,9 +155,14 @@ def train_generator(epoch, train_loader, model, criterion, optimizer, opt, buffe
         if idx % opt.print_freq == 0:
             string = 'Epoch: [{0}][{1}/{2}]\tTime {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tLoss {loss.val:.4f} ({loss.avg:.4f})\n'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss=losses)
             if opt.lmda_p_x > 0:
-                string += 'p(x) f(x+) {fpx.val:.4f} ({fpx.avg:.4f})\tf(x-) {fqx.val:.4f} ({fqx.avg:.4f})\n'.format(fpx=fpxs, fqx=fqxs)
+                if opt.energy != 'ssm':
+                    string += 'p(x) f(x+) {fpx.val:.4f} ({fpx.avg:.4f})\t'.format(fpx=fpxs)
+                # print(fqxs.count)
+                string += 'f(x-) {fqx.val:.4f} ({fqx.avg:.4f})\n'.format(fqx=fqxs)
             if opt.lmda_p_x_y > 0:
-                string += 'p(x, y) f(x+) {fpxy.val:.4f} ({fpxy.avg:.4f})\tf(x-) {fqxy.val:.4f} ({fqxy.avg:.4f})\n'.format(fpxy=fpxys, fqxy=fqxys)
+                if opt.energy != 'ssm':
+                    string += 'p(x, y) f(x+) {fpxy.val:.4f} ({fpxy.avg:.4f})\t'.format(fpxy=fpxys)
+                string += 'f(x-) {fqxy.val:.4f} ({fqxy.avg:.4f})\n'.format(fqxy=fqxys)
             print(string)
             sys.stdout.flush()
             if opt.plot_uncond:
@@ -154,7 +170,8 @@ def train_generator(epoch, train_loader, model, criterion, optimizer, opt, buffe
                 x_q = sample_q(model, buffer, y=y_q)
                 plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q)
             if opt.plot_cond:  # generate class-conditional samples
-                y = torch.arange(0, opt.n_cls)[None].repeat(opt.n_cls, 1).transpose(1, 0).contiguous().view(-1).to(input.device)
+                y = torch.arange(0, opt.n_cls).to(input.device)
+                # print(y.shape)
                 x_q_y = sample_q(model, buffer, y=y)
                 plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q_y)
 

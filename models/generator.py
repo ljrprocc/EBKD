@@ -237,6 +237,7 @@ class FF(nn.Module):
         super(FF, self).__init__()
         self.f = model
         self.mlp_cls_head = nn.Sequential(
+            nn.LeakyReLU(0.2),
             nn.Linear(self.f.last_dim, 256),
             nn.LeakyReLU(0.2),
             nn.Linear(256, 64),
@@ -266,7 +267,7 @@ class FF(nn.Module):
             else:
                 feat = feats[-1]
             ori_feat = feat
-            feat = self.mlp_cls_head(ori_feat)
+            # feat = self.mlp_cls_head(ori_feat)
             if return_logit:
                 return ori_feat, self.energy_output(feat).squeeze()
             return self.energy_output(feat).squeeze()
@@ -281,33 +282,24 @@ class CCF(FF):
         #print(cls_mode, is_feat, preact, y)
         
         feats, logits = super().forward(x, y=None, cls_mode=True, is_feat=True, preact=preact)
-        feat = feats[-1]
-        # if not feats[-1].requires_grad:
-        #     feat = feats[-1].detach()
-        # else:
-        #     feat = feats[-1]
-        # if cls_mode:
-        #     return outs if not is_feat else feats, outs
-
-        feat = self.mlp_cls_head(feat)
-        feat = self.cls_head(feat)
+        # feat = feats[-1]
         if cls_mode:
             # print(is_feat)
             if not is_feat:
-                return feat
+                return logits
             else:
-                return feats, feat
+                return feats, logits
         if is_feat:
             if y is None:
-                return feats, feat.logsumexp(1)
+                return feats, logits.logsumexp(1)
             else:
-                return feats, torch.gather(feat, 1, y[:, None])
+                return feats, torch.gather(logits, 1, y[:, None])
         else:
             # logits = super().forward(x=x, y=y, cls_mode=False)
             # print(logits.requires_grad)
             if y is None:
-                return feat.logsumexp(1)
+                return logits.logsumexp(1)
             else:
-                return torch.gather(feat, 1, y[:, None])
+                return torch.gather(logits, 1, y[:, None])
 
 

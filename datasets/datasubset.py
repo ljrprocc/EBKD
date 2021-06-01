@@ -75,14 +75,14 @@ def get_dataloaders_and_datasets(base_dataset, test_base_dataset, opt):
     dset_test = test_base_dataset
     dload_valid = DataLoader(
         dset_valid,
-        batch_size=100,
+        batch_size=25,
         shuffle=False,
         num_workers=4,
         drop_last=False
     )
     dload_test = DataLoader(
         dset_test,
-        batch_size=100,
+        batch_size=25,
         shuffle=False,
         num_workers=4,
         drop_last=False

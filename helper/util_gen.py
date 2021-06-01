@@ -83,6 +83,72 @@ def get_sample_q(opts, device=None):
             replay_buffer[buffer_inds] = final_samples.cpu()
         return final_samples
     return sample_q
+    
+def sliced_VR_score_matching(energy_net, samples, noise=None, detach=False, noise_type='radermacher', y=None):
+    # Single MCMC step, for the matching of score function, i.e.,
+    # s_m(x;\theta) = \nabla_{x} \log p_{\theta}(x)
+    samples.requires_grad_(True)
+    if noise is None:
+        vectors = torch.randn_like(samples)
+        if noise_type == 'radermacher':
+            vectors = vectors.sign()
+        elif noise_type == 'gaussian':
+            pass
+        else:
+            raise ValueError("Noise type not implemented")
+    else:
+        vectors = noise
+
+    logp = -energy_net(samples, y=y).sum()
+    grad1 = autograd.grad(logp, samples, create_graph=True)[0]
+    gradv = torch.sum(grad1 * vectors)
+    loss1 = torch.norm(grad1, dim=-1) ** 2 * 0.5
+    if detach:
+        loss1 = loss1.detach()
+    grad2 = autograd.grad(gradv, samples, create_graph=True)[0]
+    loss2 = torch.sum(vectors * grad2, dim=-1)
+    if detach:
+        loss2 = loss2.detach()
+
+    loss = (loss1 + loss2).mean()
+    return loss, logp
+
+def ssm_sample(opt, replay_buffer, model, x_p, x_lab, y_lab):
+    sample_q = get_sample_q(opt, x_p.device)
+    cache_p_x = None
+    cache_p_y = None
+    L = 0
+    if opt.lmda_p_x > 0:
+        y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(x_p.device)
+        x_q = sample_q(model, replay_buffer, y=y_q)
+        loss_x, score_qx = sliced_VR_score_matching(model, x_q)
+        L += loss_x * opt.lmda_p_x
+    if opt.lmda_p_x_y > 0:
+        x_q_lab = sample_q(model, replay_buffer, y=y_lab)
+        loss_xy, score_q_xy = sliced_VR_score_matching(model, x_q_lab, y=y_q)
+        L += loss_xy * opt.lmda_p_x_y
+    L.backward()
+    return L, score_qx, score_q_xy
+
+def get_image_prior_losses(inputs):
+    diff1 = inputs[:, :, :, :-1] - inputs[:, :, :, 1:]
+    diff2 = inputs[:, :, :-1, :] - inputs[:, :, 1:, :]
+    diff3 = inputs[:, :, 1:, :-1] - inputs[:, :, :-1, 1:]
+    diff4 = inputs[:, :, :-1, :-1] - inputs[:, :, 1:, 1:]
+
+    loss_var_l2 = torch.norm(diff1, dim=(1,2,3)) + torch.norm(diff2, dim=(1,2,3)) + torch.norm(diff3, dim=(1,2,3)) + torch.norm(diff4, dim=(1,2,3))
+
+    return loss_var_l2
+
+def update_lc_theta(opt, neg_out, x_q, logit, y_gt):
+    l_tv = get_image_prior_losses(x_q)
+    n_cls = opt.n_cls
+    y_one_hot = torch.eye(n_cls)[y_gt].to(x_q.device)
+    l_cls = -torch.sum(torch.log_softmax(logit, 1) * y_one_hot, 1)
+    l_2 = torch.norm(x_q, dim=-1)
+    lc = lmda_l2 * l_2 + lmda_tv * l_tv + l_cls
+    l_backward = (lc * neg_out).mean() - lc.mean() * neg_out.mean()
+    return l_backward
 
 def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab):
     L = 0
@@ -93,8 +159,8 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab):
     if opt.lmda_p_x > 0:
         y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(x_p.device)
         # The process of get x_q~p_{\theta}(x), stochastic process of x*=argmin_{x}(E_{\theta}(x))
+        # print(replay_buffer.shape, y_q.shape)
         x_q = sample_q(model, replay_buffer, y=y_q)
-        
         f_p = model(x_p)
         f_q = model(x_q)
         fp = f_p.mean()
@@ -116,9 +182,15 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab):
     logit = model(x_lab, cls_mode=True)
     # print(len(logit))
     l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
+    # l_c = update_lc_theta(opt, fq, x_q_lab, logit, y_lab)
     # print(l_cls)
-    L += 0.1 * l_cls
+    L += l_cls
+    # L += l_c
     L.backward()
+    # print(l_p_x, l_cls)
+    if L.abs().item() > 1e8:
+        print('Bad Result.')
+        raise ValueError('Not converged.')
     # print(L)
     return L, cache_p_x, cache_p_x_y
 

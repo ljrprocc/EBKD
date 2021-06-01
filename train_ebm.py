@@ -37,12 +37,13 @@ def parse_option():
     parser.add_argument('--num_workers', type=int, default=8, help='num of workers to use')
     parser.add_argument('--epochs', type=int, default=240, help='number of training epochs')
     parser.add_argument('--init_epochs', type=int, default=0, help='init training for two-stage methods and resume')
+    parser.add_argument('--warmup_iters', type=int, default=200, help="number of iters to linearly increase learning rate, -1 set no warmup.")
 
     # optimization
     parser.add_argument('--learning_rate', type=float, default=0.01, help='learning rate')
     parser.add_argument('--lr_decay_epochs', type=str, default='150,180,210,250', help='where to decay lr, can be a list')
-    parser.add_argument('--lr_decay_rate', type=float, default=0.1, help='decay rate for learning rate')
-    parser.add_argument('--weight_decay', type=float, default=5e-4, help='weight decay')
+    parser.add_argument('--lr_decay_rate', type=float, default=0.3, help='decay rate for learning rate')
+    parser.add_argument('--weight_decay', type=float, default=0.0, help='weight decay')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 
     # Generator Details
@@ -57,10 +58,12 @@ def parse_option():
 
     # model
     parser.add_argument('--model', type=str, default='resnet110',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110',
-                                 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2',
-                                 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19',
-                                 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50' ])
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50' ])
+    parser.add_argument('--model_s', type=str, default='resnet8x4',
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50' ])
+    parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
+    
+    
     parser.add_argument('--path_t', type=str, default=None, help='teacher model snapshot')
 
     parser.add_argument('--energy', default='mcmc', type=str, help='Sampling method to update EBM.')
@@ -105,7 +108,7 @@ def parse_option():
 
     # opt.model_t = get_teacher_name(opt.path_t)
 
-    opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size{}_trial_{}'.format(opt.model, opt.dataset, opt.learning_rate, opt.weight_decay, opt.capcitiy, opt.trial)
+    opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size{}_lpx_{}_lpxy_{}_energy_mode_{}_trial_{}'.format(opt.model, opt.dataset, opt.learning_rate, opt.weight_decay, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.trial)
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
     if not os.path.isdir(opt.tb_folder):
@@ -128,7 +131,7 @@ def get_teacher_name(model_path):
 def load_teacher(model_path, opt):
     print('=====> loading teacher model.')
     model_t = get_teacher_name(model_path)
-    model = model_dict[model_t](num_classes=opt.n_cls)
+    model = model_dict[model_t](num_classes=opt.n_cls, norm='batch')
     if opt.dataset == 'imagenet':
         model = model_dict[model_t](num_classes=opt.n_cls, pretrained=True)
     else:
@@ -160,18 +163,20 @@ def main():
         raise NotImplementedError(opt.dataset)
 
     # model
-    model = model_dict[opt.model](num_classes=opt.n_cls)
+    # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
     model = load_teacher(opt.path_t, opt)
-    model = model_dict['Score'](model=model, n_cls=opt.n_cls)
-   
-    print(model)
-        
-    optimizer = optim.SGD(model.parameters(), lr=opt.learning_rate, momentum=opt.momentum,  weight_decay=opt.weight_decay)
+    model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm)
+    model_score = model_dict['Score'](model=model_score, n_cls=opt.n_cls)
+    # model = model_dict['Score'](model=model, n_cls=opt.n_cls)
+    # print(model)
+    optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate, betas=[0.9, 0.999],  weight_decay=opt.weight_decay)
+    model_list = [model, model_score]
     # optimizer = nn.DataParallel(optimizer)
     criterion = TVLoss()
     
     if torch.cuda.is_available():
         model = model.cuda()
+        model_score = model_score.cuda()
         criterion = criterion.cuda()
         cudnns.benchmark = True
 
@@ -182,12 +187,16 @@ def main():
 
     # routine
     for epoch in range(1, opt.epochs + 1):
+        if epoch in opt.lr_decay_epochs:
+            for param_group in optimizer.param_groups:
+                new_lr = param_group['lr'] * opt.lr_decay_rate
+                param_group['lr'] = new_lr
 
         adjust_learning_rate(epoch, opt, optimizer)
         print("==> training...")
 
         time1 = time.time()
-        train_loss = train_generator(epoch, train_loader, model, criterion, optimizer, opt, buffer)
+        train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer)
         time2 = time.time()
         logger.log_value('train_loss', train_loss, epoch)
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
