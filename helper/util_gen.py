@@ -12,7 +12,7 @@ import cv2
 def init_random(s1, s2, s3, s4):
     return torch.FloatTensor(s1, s2, s3, s4).uniform_(-1, 1)
 
-def get_replay_buffer(opt):
+def get_replay_buffer(opt, model=None):
     bs = opt.capcitiy
     nc = 3
     if opt.dataset == 'cifar100':
@@ -25,7 +25,9 @@ def get_replay_buffer(opt):
         print('Loading replay buffer from local..')
         ckpt_dict = torch.load(opt.load_buffer_path)
         replay_buffer = ckpt_dict["replay_buffer"]
-    return replay_buffer
+        if model:
+            model.load_state_dict(ckpt_dict["model_state_dict"])
+    return replay_buffer, model
 
 def getDirichl(bs, num_classes, sim_matrix, scale):
     X = torch.zeros(bs, num_classes).to(sim_matrix.device)
@@ -87,30 +89,21 @@ def get_sample_q(opts, device=None):
 def sliced_VR_score_matching(energy_net, samples, noise=None, detach=False, noise_type='radermacher', y=None):
     # Single MCMC step, for the matching of score function, i.e.,
     # s_m(x;\theta) = \nabla_{x} \log p_{\theta}(x)
-    samples.requires_grad_(True)
-    if noise is None:
-        vectors = torch.randn_like(samples)
-        if noise_type == 'radermacher':
-            vectors = vectors.sign()
-        elif noise_type == 'gaussian':
-            pass
-        else:
-            raise ValueError("Noise type not implemented")
-    else:
-        vectors = noise
+    dup_samples = samples.unsqueeze(0).expand(n_particles, *samples.shape).contiguous().view(-1, *samples.shape[1:])
+    dup_samples.requires_grad_(True)
+    vectors = torch.randn_like(dup_samples)
 
-    logp = -energy_net(samples, y=y).sum()
-    grad1 = autograd.grad(logp, samples, create_graph=True)[0]
+    logp = energy_net(dup_samples, y=y).sum()
+    grad1 = autograd.grad(logp, dup_samples, create_graph=True)[0]
+    loss1 = torch.sum(grad1 * grad1, dim=-1) / 2.
     gradv = torch.sum(grad1 * vectors)
-    loss1 = torch.norm(grad1, dim=-1) ** 2 * 0.5
-    if detach:
-        loss1 = loss1.detach()
-    grad2 = autograd.grad(gradv, samples, create_graph=True)[0]
+    grad2 = autograd.grad(gradv, dup_samples, create_graph=True)[0]
     loss2 = torch.sum(vectors * grad2, dim=-1)
-    if detach:
-        loss2 = loss2.detach()
 
-    loss = (loss1 + loss2).mean()
+    loss1 = loss1.view(n_particles, -1).mean(dim=0)
+    loss2 = loss2.view(n_particles, -1).mean(dim=0)
+
+    loss = loss1 + loss2
     return loss, logp
 
 def ssm_sample(opt, replay_buffer, model, x_p, x_lab, y_lab):
@@ -118,6 +111,8 @@ def ssm_sample(opt, replay_buffer, model, x_p, x_lab, y_lab):
     cache_p_x = None
     cache_p_y = None
     L = 0
+    score_qx = 0
+    score_q_xy = 0
     if opt.lmda_p_x > 0:
         y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(x_p.device)
         x_q = sample_q(model, replay_buffer, y=y_q)
@@ -125,7 +120,7 @@ def ssm_sample(opt, replay_buffer, model, x_p, x_lab, y_lab):
         L += loss_x * opt.lmda_p_x
     if opt.lmda_p_x_y > 0:
         x_q_lab = sample_q(model, replay_buffer, y=y_lab)
-        loss_xy, score_q_xy = sliced_VR_score_matching(model, x_q_lab, y=y_q)
+        loss_xy, score_q_xy = sliced_VR_score_matching(model, x_q_lab, y=y_lab)
         L += loss_xy * opt.lmda_p_x_y
     L.backward()
     return L, score_qx, score_q_xy
@@ -139,6 +134,33 @@ def get_image_prior_losses(inputs):
     loss_var_l2 = torch.norm(diff1, dim=(1,2,3)) + torch.norm(diff2, dim=(1,2,3)) + torch.norm(diff3, dim=(1,2,3)) + torch.norm(diff4, dim=(1,2,3))
 
     return loss_var_l2
+
+def cond_samples(model, replay_buffer, opt, fresh=False):
+    sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
+    plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
+
+    if fresh:
+        pass
+    
+    n_it = replay_buffer.size(0) // 100
+    all_y = []
+    n_cls = opt.n_cls
+    for i in range(n_it):
+        x = replay_buffer[i * 100: (i + 1) * 100].cuda()
+        y = model(x, cls_mode=True).max(1)[1]
+        all_y.append(y)
+    
+    all_y = torch.cat(all_y, 0)
+    each_class = [replay_buffer[all_y == l] for l in range(n_cls)]
+    print([len(c) for c in each_class])
+    for i in range(100):
+        this_im = []
+        for l in range(n_cls):
+            this_l = each_class[l][i*n_cls:(i+1)*n_cls]
+            this_im.append(this_l)
+        this_im = torch.cat(this_im, 0)
+        if this_im.size(0) > 0:
+            plot('{}/samples_{}.png'.format(opt.save_dir, i), this_im)
 
 def update_lc_theta(opt, neg_out, x_q, logit, y_gt):
     l_tv = get_image_prior_losses(x_q)

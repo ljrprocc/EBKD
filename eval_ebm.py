@@ -22,7 +22,7 @@ from datasets.imagenet import get_imagenet_dataloader, get_dataloader_sample
 from helper.util import adjust_learning_rate, TVLoss
 from helper.util_gen import get_replay_buffer
 
-from helper.loops import train_generator
+from helper.loops import validate_G
 from helper.pretrain import init
 # from helper.util import SampleBuffer
 
@@ -57,8 +57,6 @@ def parse_option():
     # parser.add_argument('--save_dir', type=str, default='../save/', help='The directory for saving the generated samples.')
 
     # model
-    parser.add_argument('--model', type=str, default='resnet110',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50' ])
     parser.add_argument('--model_s', type=str, default='resnet8x4',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50' ])
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
@@ -83,15 +81,7 @@ def parse_option():
     parser.add_argument('--n_valid', type=int, default=5000, help='Set validation data.')
     parser.add_argument('--labels_per_class', type=int, default=-1, help='Number of labeled examples per class.')
 
-
-    # DDP options
-    parser.add_argument('--local_rank', default=-1, type=int, help='node rank for distributed training')
-
     opt = parser.parse_args()
-
-    # set different learning rate from these 4 models
-    if opt.model in ['MobileNetV2', 'ShuffleV1', 'ShuffleV2']:
-        opt.learning_rate = 0.01
 
     # set the path according to the environment
     if hostname.startswith('visiongpu'):
@@ -101,14 +91,10 @@ def parse_option():
         opt.model_path = './save/student_model'
         opt.tb_path = './save/student_tensorboards'
 
-    iterations = opt.lr_decay_epochs.split(',')
-    opt.lr_decay_epochs = list([])
-    for it in iterations:
-        opt.lr_decay_epochs.append(int(it))
 
     # opt.model_t = get_teacher_name(opt.path_t)
 
-    opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size{}_lpx_{}_lpxy_{}_energy_mode_{}_trial_{}'.format(opt.model, opt.dataset, opt.learning_rate, opt.weight_decay, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.trial)
+    opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size{}_lpx_{}_lpxy_{}_energy_mode_{}_trial_{}'.format(opt.model_s, opt.dataset, opt.learning_rate, opt.weight_decay, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.trial)
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
     if not os.path.isdir(opt.tb_folder):
@@ -118,101 +104,37 @@ def parse_option():
     if not os.path.isdir(opt.save_folder):
         os.makedirs(opt.save_folder)
 
+    if opt.dataset == 'cifar100':
+        opt.n_cls = 100
+    else:
+        opt.n_cls = 1000
     return opt
-
-
-def get_teacher_name(model_path):
-    segments = model_path.split('/')[-2].split('_')
-    if segments[0] != 'wrn':
-        return segments[0]
-    else:
-        return segments[0] + '_' + segments[1] + '_' + segments[2]
-
-def load_teacher(model_path, opt):
-    print('=====> loading teacher model.')
-    model_t = get_teacher_name(model_path)
-    model = model_dict[model_t](num_classes=opt.n_cls, norm='batch')
-    if opt.dataset == 'imagenet':
-        model = model_dict[model_t](num_classes=opt.n_cls, pretrained=True)
-    else:
-        model.load_state_dict(torch.load(model_path)['model'])
-    print('===> done.')
-    return model
-
-def setup_ranks():
-    os.environ['OPM_NUM_THREADS'] = '1'
-    torch.distributed.init_process_group(backend="nccl")
-    local_rank = torch.distributed.get_rank()
-    torch.cuda.set_device(local_rank)
-    device = torch.device("cuda", local_rank)
-    return local_rank, device
 
 def main():
     opt = parse_option()
-    opt.save_dir = os.path.join(opt.save_folder, 'img_samples/')
+    opt.save_dir = os.path.join(opt.save_folder, 'img_sample_eval/')
     if not os.path.exists(opt.save_dir):
         os.mkdir(opt.save_dir)
     # dataloader
-    if opt.dataset == 'cifar100':
-        train_loader, val_loader = get_cifar100_dataloaders(opt, batch_size=opt.batch_size, num_workers=opt.num_workers, use_subdataset=True)
-        opt.n_cls = 100
-    elif opt.dataset == 'imagenet':
-        train_loader, val_loader, n_data = get_imagenet_dataloader(batch_size=opt.batch_size, num_workers=opt.num_workers, is_instance=True, use_subdataset=True)
-        opt.n_cls = 1000
-    else:
-        raise NotImplementedError(opt.dataset)
-
     # model
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
-    model = load_teacher(opt.path_t, opt)
     model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm)
     model_score = model_dict['Score'](model=model_score, n_cls=opt.n_cls)
     # model = model_dict['Score'](model=model, n_cls=opt.n_cls)
     # print(model)
-    optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate, betas=[0.9, 0.999],  weight_decay=opt.weight_decay)
-    model_list = [model, model_score]
     # optimizer = nn.DataParallel(optimizer)
-    criterion = TVLoss()
     
     if torch.cuda.is_available():
-        model = model.cuda()
         model_score = model_score.cuda()
-        criterion = criterion.cuda()
         cudnns.benchmark = True
 
     # tensorboard
-    logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
+    # logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
-    buffer, _ = get_replay_buffer(opt)
+    buffer, model = get_replay_buffer(opt, model=model_score)
+    validate_G(model, buffer, opt)
+
 
     # routine
-    for epoch in range(1, opt.epochs + 1):
-        if epoch in opt.lr_decay_epochs:
-            for param_group in optimizer.param_groups:
-                new_lr = param_group['lr'] * opt.lr_decay_rate
-                param_group['lr'] = new_lr
-
-        adjust_learning_rate(epoch, opt, optimizer)
-        print("==> training...")
-
-        time1 = time.time()
-        train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer)
-        time2 = time.time()
-        logger.log_value('train_loss', train_loss, epoch)
-        print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
-        
-        # save the best model
-        # print('Saving Sampling Buffer')
-        print('Sample Buffer:')
-        print('length: %d' % (len(buffer)))
-        
-        if epoch % opt.save_freq == 0:
-            print('Writing valid samples')
-            ckpt_dict = {
-                "model_state_dict": model_score.state_dict(),
-                "replay_buffer": buffer
-            }
-            torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_epoch_{epoch}.pts'.format(epoch=epoch)))
-
 if __name__ == '__main__':
     main()
