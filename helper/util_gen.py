@@ -126,53 +126,69 @@ def ssm_sample(opt, replay_buffer, model, x_p, x_lab, y_lab):
     return L, score_qx, score_q_xy
 
 def get_image_prior_losses(inputs):
+    bs = inputs.size(0)
     diff1 = inputs[:, :, :, :-1] - inputs[:, :, :, 1:]
     diff2 = inputs[:, :, :-1, :] - inputs[:, :, 1:, :]
     diff3 = inputs[:, :, 1:, :-1] - inputs[:, :, :-1, 1:]
     diff4 = inputs[:, :, :-1, :-1] - inputs[:, :, 1:, 1:]
 
-    loss_var_l2 = torch.norm(diff1, dim=(1,2,3)) + torch.norm(diff2, dim=(1,2,3)) + torch.norm(diff3, dim=(1,2,3)) + torch.norm(diff4, dim=(1,2,3))
+    loss_var_l2 = torch.norm(diff1.view(bs, -1), dim=-1) + torch.norm(diff2.view(bs, -1), dim=-1) + torch.norm(diff3.view(bs, -1), dim=-1) + torch.norm(diff4.view(bs, -1), dim=-1)
 
     return loss_var_l2
 
 def cond_samples(model, replay_buffer, opt, fresh=False):
     sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
-
-    if fresh:
-        pass
-    
-    n_it = replay_buffer.size(0) // 100
-    all_y = []
     n_cls = opt.n_cls
-    for i in range(n_it):
-        x = replay_buffer[i * 100: (i + 1) * 100].cuda()
-        y = model(x, cls_mode=True).max(1)[1]
-        all_y.append(y)
+    meta_buffer_size = replay_buffer.size(0) // n_cls
+    for i in range(n_cls):
+        if opt.save_grid:
+            plot('{}/samples_label_{}.png'.format(opt.save_dir, i), replay_buffer[i*meta_buffer_size:(i+1)*meta_buffer_size])
+        else:
+            for j in range(meta_buffer_size):
+                plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), replay_buffer[i*meta_buffer_size+j])
     
-    all_y = torch.cat(all_y, 0)
-    each_class = [replay_buffer[all_y == l] for l in range(n_cls)]
-    print([len(c) for c in each_class])
-    for i in range(100):
-        this_im = []
-        for l in range(n_cls):
-            this_l = each_class[l][i*n_cls:(i+1)*n_cls]
-            this_im.append(this_l)
-        this_im = torch.cat(this_im, 0)
-        if this_im.size(0) > 0:
-            plot('{}/samples_{}.png'.format(opt.save_dir, i), this_im)
+    print('Successfully saving the generated result of replay buffer.')
+        
+
+    # if fresh:
+    #     pass
+    
+    # n_it = replay_buffer.size(0) // 100
+    # all_y = []
+    # n_cls = opt.n_cls
+    # for i in range(n_it):
+    #     x = replay_buffer[i * 100: (i + 1) * 100].cuda()
+    #     y = model(x, cls_mode=True).max(1)[1]
+    #     all_y.append(y)
+    
+    # all_y = torch.cat(all_y, 0)
+    # each_class = [replay_buffer[all_y == l] for l in range(n_cls)]
+    # print([len(c) for c in each_class])
+    # for i in range(100):
+    #     this_im = []
+    #     for l in range(n_cls):
+    #         this_l = each_class[l][i*n_cls:(i+1)*n_cls]
+    #         this_im.append(this_l)
+    #     this_im = torch.cat(this_im, 0)
+    #     print(this_im)
+    #     # print(this_im.size(0))
+    #     if this_im.size(0) > 0:
+    #         plot('{}/samples_{}.png'.format(opt.save_dir, i), this_im)
 
 def update_lc_theta(opt, neg_out, x_q, logit, y_gt):
     l_tv = get_image_prior_losses(x_q)
     n_cls = opt.n_cls
     y_one_hot = torch.eye(n_cls)[y_gt].to(x_q.device)
     l_cls = -torch.sum(torch.log_softmax(logit, 1) * y_one_hot, 1)
-    l_2 = torch.norm(x_q, dim=-1)
-    lc = lmda_l2 * l_2 + lmda_tv * l_tv + l_cls
+    bs = x_q.size(0)
+    l_2 = torch.norm(x_q.view(bs, -1), dim=-1)
+    # print(l_cls.shape, l_2.shape, l_tv.shape)
+    lc = opt.lmda_l2 * l_2 + opt.lmda_tv * l_tv + l_cls
     l_backward = (lc * neg_out).mean() - lc.mean() * neg_out.mean()
     return l_backward
 
-def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab):
+def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     L = 0
     sample_q = get_sample_q(opt, x_p.device)
     cache_p_x = None
@@ -201,13 +217,15 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab):
         L += opt.lmda_p_x_y * l_p_x_y
 
     # P(y | x). Here needs the update of x.
-    logit = model(x_lab, cls_mode=True)
+    logit = model(x_q_lab, cls_mode=True)
     # print(len(logit))
     l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
-    # l_c = update_lc_theta(opt, fq, x_q_lab, logit, y_lab)
+    if model_t:
+        l_c = update_lc_theta(opt, fq, x_q_lab, logit, y_lab)
+        L += l_c
     # print(l_cls)
     L += l_cls
-    # L += l_c
+    
     L.backward()
     # print(l_p_x, l_cls)
     if L.abs().item() > 1e8:

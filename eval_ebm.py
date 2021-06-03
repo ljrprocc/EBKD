@@ -80,6 +80,7 @@ def parse_option():
     parser.add_argument('--load_buffer_path', type=str, default=None, help='If not none, the loading path of replay buffer.')
     parser.add_argument('--n_valid', type=int, default=5000, help='Set validation data.')
     parser.add_argument('--labels_per_class', type=int, default=-1, help='Number of labeled examples per class.')
+    parser.add_argument('--save_grid', action="store_true", help="Flag for saving the generated results.")
 
     opt = parser.parse_args()
 

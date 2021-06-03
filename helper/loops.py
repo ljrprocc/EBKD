@@ -122,7 +122,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
         optimizer.zero_grad()
         model.zero_grad()
         if opt.energy == 'mcmc':
-            loss_ebm, cache_p_x, cache_p_y = update_theta(opt, buffer, model, input, x_lab, y_lab)    
+            loss_ebm, cache_p_x, cache_p_y = update_theta(opt, buffer, model, input, x_lab, y_lab, model_t=model_t)    
         elif opt.energy == 'ssm':
             loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
         else:

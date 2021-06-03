@@ -10,4 +10,4 @@
 
 # python train_teacher.py --model vgg13
 
-CUDA_VISIBLE_DEVICES=1 python train_ebm.py --model_s resnet8x4 --trial 1 --capcitiy 20000 --path_t ./save/models/resnet32x4_vanilla/ckpt_epoch_240.pth --g_steps 20 --save_freq 5 --epochs 150 --lr_decay_epochs 50,100 --plot_cond --learning_rate 0.0001 --batch_size 128  --energy mcmc --warmup_iters 500 --lmda_p_x_y 0. --lmda_p_x 1.
+CUDA_VISIBLE_DEVICES=1 python train_ebm.py --model_s resnet8x4 --trial 1_lc --capcitiy 20000 --path_t ./save/models/resnet32x4_vanilla/ckpt_epoch_240.pth --g_steps 20 --save_freq 5 --epochs 150 --lr_decay_epochs 50,100 --plot_cond --learning_rate 0.0001 --batch_size 128  --energy mcmc --warmup_iters 500 --lmda_p_x_y 1. --lmda_p_x 0.
