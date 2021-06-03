@@ -113,7 +113,12 @@ def parse_option():
 
 def main():
     opt = parse_option()
-    opt.save_dir = os.path.join(opt.save_folder, 'img_sample_eval/')
+    strs = 'img_sample_eval/'
+    if opt.save_grid:
+        strs = strs[:-1] + '_grid/'
+
+    opt.save_dir = os.path.join(opt.save_folder, strs)
+    print(opt.save_dir)
     if not os.path.exists(opt.save_dir):
         os.mkdir(opt.save_dir)
     # dataloader
