@@ -4,7 +4,7 @@ import os
 import socket
 import torch
 import numpy as np
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from torchvision import datasets, transforms
 from PIL import Image
 from .datasubset import get_dataloaders_and_datasets
@@ -30,12 +30,40 @@ def get_data_folder():
     elif hostname.startswith('yonglong-home'):
         data_folder = '/home/yonglong/Data/data'
     else:
-        data_folder = '/data/lijingru/cifar100/'
+        data_folder = '/data/lijingru/img_sample_eval/'
 
     if not os.path.isdir(data_folder):
         os.makedirs(data_folder)
+    test_folder = '/data/lijingru/cifar100/'
 
-    return data_folder
+    return data_folder, test_folder
+
+class CIFAR100Gen(Dataset):
+    def __init__(self, root, transform=None, target_transform=None, return_target=False):
+        self.root = root
+        self.files = os.listdir(root)
+        self.transform = transform
+        self.target_transform = target_transform
+        self.return_target = return_target
+    
+    def __getitem__(self, idx):
+        f = os.path.join(self.root, self.files[idx])
+        target = int(self.files[idx].split('_')[2])
+
+        img = Image.open(f)
+        if self.transform is not None:
+            img = self.transform(img)
+        
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+        
+        if self.return_target:
+            return img, target, idx
+        else:
+            return img
+    
+    def __len__(self):
+        return len(self.files)
 
 
 class CIFAR100Instance(datasets.CIFAR100):
@@ -64,39 +92,46 @@ def get_cifar100_dataloaders(opt, batch_size=128, num_workers=8, is_instance=Fal
     """
     cifar 100
     """
-    data_folder = get_data_folder()
-
-    train_transform = transforms.Compose([
+    data_folder, test_folder = get_data_folder()
+    train_list = [
         transforms.Pad(4, padding_mode="reflect"),
         transforms.RandomCrop(32),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        lambda x: x + 0.03 * torch.randn_like(x)
-    ])
-    test_transform = transforms.Compose([
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    ]
+    test_list = [
         transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        lambda x: x + 0.03 * torch.randn_like(x)
-    ])
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    ]
+    if use_subdataset:
+        train_list += [lambda x: x + 0.03 * torch.randn_like(x)]
+        test_list += [lambda x: x + 0.03 * torch.randn_like(x)]
 
-    if is_instance:
-        train_set = CIFAR100Instance(root=data_folder,
-                                     download=True,
-                                     train=True,
-                                     transform=train_transform)
-        n_data = len(train_set)
+    train_transform = transforms.Compose(train_list)
+    test_transform = transforms.Compose(test_list)
+    if not opt.datafree:
+        if is_instance:
+            train_set = CIFAR100Instance(root=test_folder,
+                                        download=True,
+                                        train=True,
+                                        transform=train_transform)
+            n_data = len(train_set)
+        else:
+            train_set = datasets.CIFAR100(root=test_folder,
+                                        download=True,
+                                        train=True,
+                                        transform=train_transform)
     else:
-        train_set = datasets.CIFAR100(root=data_folder,
-                                      download=True,
-                                      train=True,
-                                      transform=train_transform)
+        train_set = CIFAR100Gen(root=data_folder, transform=train_transform, return_target=True)
+        if is_instance:
+            n_data = len(train_set)
     train_loader = DataLoader(train_set,
                               batch_size=batch_size,
                               shuffle=True,
                               num_workers=num_workers)
 
-    test_set = datasets.CIFAR100(root=data_folder,
+    test_set = datasets.CIFAR100(root=test_folder,
                                  download=True,
                                  train=False,
                                  transform=test_transform)
@@ -198,18 +233,23 @@ def get_cifar100_dataloaders_sample(opt, batch_size=128, num_workers=8, k=4096, 
     """
     data_folder = get_data_folder()
 
-    train_transform = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
+    train_list = [
+        transforms.Pad(4, padding_mode="reflect"),
+        transforms.RandomCrop(32),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        lambda x: x + 0.03 * torch.randn_like(x)
-    ])
-    test_transform = transforms.Compose([
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    ]
+    test_list = [
         transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        lambda x: x + 0.03 * torch.randn_like(x)
-    ])
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+    ]
+    if use_subdataset:
+        train_list += [lambda x: x + 0.03 * torch.randn_like(x)]
+        test_list += [lambda x: x + 0.03 * torch.randn_like(x)]
+
+    train_transform = transforms.Compose(train_list)
+    test_transform = transforms.Compose(test_list)
 
     train_set = CIFAR100InstanceSample(root=data_folder,
                                        download=True,

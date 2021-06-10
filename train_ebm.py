@@ -153,6 +153,7 @@ def main():
     if not os.path.exists(opt.save_dir):
         os.mkdir(opt.save_dir)
     # dataloader
+    opt.datafree = False
     if opt.dataset == 'cifar100':
         train_loader, val_loader = get_cifar100_dataloaders(opt, batch_size=opt.batch_size, num_workers=opt.num_workers, use_subdataset=True)
         opt.n_cls = 100
@@ -161,7 +162,7 @@ def main():
         opt.n_cls = 1000
     else:
         raise NotImplementedError(opt.dataset)
-
+    
     # model
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
     model = load_teacher(opt.path_t, opt)
@@ -196,7 +197,7 @@ def main():
         print("==> training...")
 
         time1 = time.time()
-        train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer)
+        train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
         time2 = time.time()
         logger.log_value('train_loss', train_loss, epoch)
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))

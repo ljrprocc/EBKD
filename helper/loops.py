@@ -6,10 +6,13 @@ import torch
 import torch.optim as optim
 from torch.autograd import grad
 import torch.nn.functional as F
+import torchvision.transforms as T
 import torchvision.utils as vutils
 from math import sqrt
+sys.path.append('..')
+from datasets.cifar100 import CIFAR100Gen
  
-from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras
+from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras, inception_score
 from .util_gen import get_replay_buffer, update_theta, ssm_sample
 from .util_gen import get_sample_q, cond_samples
 
@@ -76,7 +79,7 @@ def train_vanilla(epoch, train_loader, model, criterion, optimizer, opt):
     return top1.avg, losses.avg
 
 
-def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer):
+def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger):
     '''One epoch for training generator with teacher'''
     model_t, model = model_list
     model.train()
@@ -122,7 +125,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
         optimizer.zero_grad()
         model.zero_grad()
         if opt.energy == 'mcmc':
-            loss_ebm, cache_p_x, cache_p_y = update_theta(opt, buffer, model, input, x_lab, y_lab, model_t=model_t)    
+            loss_ebm, cache_p_x, cache_p_y, ls = update_theta(opt, buffer, model, input, x_lab, y_lab, model_t=model_t)    
         elif opt.energy == 'ssm':
             loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
         else:
@@ -149,7 +152,12 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
         
 
         # tensorboard logger
-        pass
+        l_p_x, l_p_x_y, l_cls = ls
+        global_iter = epoch * len(train_loader) + idx
+        if global_iter % opt.print_freq == 0:
+            logger.log_value('l_p_x', l_p_x, global_iter)
+            logger.log_value('l_p_x_y', l_p_x_y, global_iter)
+            logger.log_value('l_cls', l_cls, global_iter)
 
         # print info
         if idx % opt.print_freq == 0:
@@ -233,16 +241,10 @@ def train_distill(epoch, train_loader, module_list, criterion_list, optimizer, o
             preact = True
             # input = fake_input
         # input_fake = model_G(noise, target)
-        if opt.mode != 'energy':
-            feat_s, logit_s = model_s(input, is_feat=True, preact=preact)
-        else:
-            feat_s, logit_s = model_s(input, cls_mode=True,is_feat=True, preact=preact)
+        feat_s, logit_s = model_s(input, is_feat=True, preact=preact)
         
         with torch.no_grad():
-            if opt.mode != 'energy':
-                feat_t, logit_t = model_t(input, is_feat=True, preact=preact)
-            else:
-                feat_t, logit_t = model_t(input, cls_mode=True,is_feat=True, preact=preact)
+            feat_t, logit_t = model_t(input, is_feat=True, preact=preact)
             feat_t = [f.detach() for f in feat_t]
 
         loss_cls = criterion_cls(logit_s, target)
@@ -618,10 +620,7 @@ def validate(val_loader, model, criterion, opt):
                 noise = noise.cuda()
 
             # compute output
-            if opt.mode != 'energy':
-                output = model(input)
-            else:
-                output = model(input, cls_mode=True)
+            output = model(input)
 
             # print(torch.argmax(output, 1), target)
             loss = criterion(output, target)
@@ -653,3 +652,14 @@ def validate(val_loader, model, criterion, opt):
 def validate_G(model, replay_buffer, opt):
     """validation for generation stage. Also returns inception score(IS), Fischer Inception Distance(FID). Designed for further inference."""
     cond_samples(model, replay_buffer, opt)
+    if not opt.save_grid:
+        test_folder = opt.save_dir
+        dataset = CIFAR100Gen(
+            root=test_folder,
+            transform=T.Compose([
+                T.ToTensor(),
+                T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+            ])
+        )
+        mean, var = inception_score(dataset, resize=True)
+        print(mean, var)

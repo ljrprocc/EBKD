@@ -1,7 +1,9 @@
 from __future__ import print_function
 
 import torch
+import os
 import numpy as np
+import tqdm
 import random
 import torch.optim as optim
 import torch.autograd as autograd
@@ -50,6 +52,8 @@ def get_sample_q(opts, device=None):
     else:
         im_size = 224
         n_cls = 1000
+    sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
+    plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     def sample_p_0(replay_buffer, bs, y=None):
         if len(replay_buffer) == 0:
             return init_random(bs, nc, im_size, im_size), []
@@ -64,7 +68,7 @@ def get_sample_q(opts, device=None):
         samples = choose_random * random_samples + (1 - choose_random) * buffer_samples
         return samples.cuda(), inds
 
-    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps):
+    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False):
         """this func takes in replay_buffer now so we have the option to sample from
         scratch (i.e. replay_buffer==[]).  See test_wrn_ebm.py for example.
         """
@@ -78,6 +82,9 @@ def get_sample_q(opts, device=None):
         for k in range(n_steps):
             f_prime = torch.autograd.grad(f(x_k, y=y).sum(), [x_k], retain_graph=True)[0]
             x_k.data += opts.step_size * f_prime + 0.01 * torch.randn_like(x_k)
+            if open_debug:
+                plot('{}/debug_{}.png'.format(opts.save_folder, k))
+                exit(-1)
         f.train()
         final_samples = x_k.detach()
         # update replay buffer
@@ -141,14 +148,27 @@ def cond_samples(model, replay_buffer, opt, fresh=False):
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     n_cls = opt.n_cls
     meta_buffer_size = replay_buffer.size(0) // n_cls
-    for i in range(n_cls):
+    model.eval()
+    log_dir = os.path.join(opt.save_folder, 'log.txt')
+    f = open(log_dir, 'w')
+    
+    for i in tqdm.tqdm(range(n_cls)):
         if opt.save_grid:
             plot('{}/samples_label_{}.png'.format(opt.save_dir, i), replay_buffer[i*meta_buffer_size:(i+1)*meta_buffer_size])
         else:
             for j in range(meta_buffer_size):
-                plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), replay_buffer[i*meta_buffer_size+j])
+                global_idx = i*meta_buffer_size+j
+                y = torch.LongTensor([i]).cuda()
+                plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), replay_buffer[global_idx])
+                output = model(replay_buffer[global_idx].unsqueeze(0).cuda()).mean()
+                output_xy = model(replay_buffer[global_idx].unsqueeze(0).cuda(), y=y).mean()
+                write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
+                f.write(write_str)
+
+
     
     print('Successfully saving the generated result of replay buffer.')
+    f.close()
         
 
     # if fresh:
@@ -193,6 +213,7 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     sample_q = get_sample_q(opt, x_p.device)
     cache_p_x = None
     cache_p_x_y = None
+    ls = []
     # P(x) modeling
     if opt.lmda_p_x > 0:
         y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(x_p.device)
@@ -205,21 +226,30 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         fq = f_q.mean()
         l_p_x = -(fp-fq)
         L += opt.lmda_p_x * l_p_x
+        ls.append(l_p_x)
         cache_p_x = (fp, fq)
+    else:
+        ls.append(0.0)
     # Here use x_labeled and y_labeled, to unifying the label information.
     # Followed by the idea of jem
 
     if opt.lmda_p_x_y > 0:
         x_q_lab = sample_q(model, replay_buffer, y=y_lab)
+        # -E_{\theta}, bigger better.
         fp, fq = model(x_lab, y_lab).mean(), model(x_q_lab, y_lab).mean()
         l_p_x_y  = -(fp-fq)
         cache_p_x_y = (fp, fq)
         L += opt.lmda_p_x_y * l_p_x_y
+        ls.append(l_p_x_y)
+    else:
+        ls.append(0.0)
 
     # P(y | x). Here needs the update of x.
-    logit = model(x_q_lab, cls_mode=True)
+    logit = model(x_q, cls_mode=True)
     # print(len(logit))
-    l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
+    # l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
+    l_cls = -torch.log_softmax(logit, 1).mean()
+    ls.append(l_cls)
     if model_t:
         l_c = update_lc_theta(opt, fq, x_q_lab, logit, y_lab)
         L += l_c
@@ -232,7 +262,7 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         print('Bad Result.')
         raise ValueError('Not converged.')
     # print(L)
-    return L, cache_p_x, cache_p_x_y
+    return L, cache_p_x, cache_p_x_y, ls
 
 
 def create_similarity(netT_path, scale=1):

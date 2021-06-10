@@ -24,7 +24,6 @@ from distiller_zoo import DistillKL, HintLoss, Attention
 
 from helper.loops import train_distill, validate, train_distill_G
 from helper.pretrain import init
-from helper.util import SampleBuffer
 
 def parse_option():
     hostname = socket.gethostname()
@@ -55,6 +54,7 @@ def parse_option():
                                  'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'ResNet50',
                                  'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50', 'ResNet18'])
     parser.add_argument('--path_t', type=str, default=None, help='teacher model snapshot')
+    parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
 
     # distillation
     parser.add_argument('--distill', type=str, default='kd', choices=['kd', 'hint', 'attention', 'similarity', 'correlation', 'vid', 'crd', 'kdsvd', 'fsp', 'rkd', 'pkt', 'abound', 'factor', 'nst', 'energy', 'ebkd'])
@@ -69,7 +69,6 @@ def parse_option():
 
     # NCE distillation
     parser.add_argument('--feat_dim', default=128, type=int, help='feature dimension')
-    parser.add_argument('--mode', default='exact', type=str, choices=['exact', 'relax', 'energy'])
     parser.add_argument('--datafree', action='store_true')
     parser.add_argument('--nce_k', default=16384, type=int, help='number of negative samples for NCE')
     parser.add_argument('--nce_t', default=0.07, type=float, help='temperature parameter for softmax')
@@ -133,7 +132,7 @@ def get_teacher_name(model_path):
 def load_teacher(model_path, n_cls, opt):
     print('=====> loading teacher model.')
     model_t = get_teacher_name(model_path)
-    model = model_dict[model_t](num_classes=n_cls)
+    model = model_dict[model_t](num_classes=n_cls, norm=opt.norm)
     if opt.dataset == 'imagenet':
         model = model_dict[model_t](num_classes=n_cls, pretrained=True)
     else:
@@ -164,7 +163,7 @@ def main():
                                                                                k=opt.nce_k,
                                                                                mode=opt.mode)
         else:
-            train_loader, val_loader, n_data = get_cifar100_dataloaders(batch_size=opt.batch_size, num_workers=opt.num_workers, is_instance=True)
+            train_loader, val_loader, n_data = get_cifar100_dataloaders(opt=opt, batch_size=opt.batch_size, num_workers=opt.num_workers, is_instance=True)
         n_cls = 100
 
     elif opt.dataset == 'imagenet':
@@ -178,10 +177,7 @@ def main():
         local_rank, device = setup_ranks()
 
     model_t = load_teacher(opt.path_t, n_cls, opt)
-    model_s = model_dict[opt.model_s](num_classes=n_cls)
-    if opt.mode == 'energy':
-        model_s = model_dict['Score'](model=model_s, n_cls=n_cls)
-        model_t = model_dict['Score'](model=model_t, n_cls=n_cls)
+    model_s = model_dict[opt.model_s](num_classes=n_cls, norm=opt.norm)
 
     if opt.init_epochs > 0:
         print('==> Loading resumed epochs..')
@@ -311,9 +307,6 @@ def main():
                           lr=opt.learning_rate,
                           momentum=opt.momentum,
                           weight_decay=opt.weight_decay)
-    if opt.mode == 'energy':
-        opt_G = optim.Adam(model_t.energy_output.parameters(),lr=0.01, betas=(0.5, 0.999), weight_decay=opt.weight_decay)
-        optimizer_list.append(opt_G)
     
     optimizer_list.append(optimizer)
 
@@ -334,8 +327,6 @@ def main():
     # validate teacher accuracy
     teacher_acc, _, _ = validate(val_loader, model_t, criterion_cls, opt)
     print('teacher accuracy: ', teacher_acc)
-    if opt.datafree:
-        buffer = SampleBuffer(net_T=opt.path_t)
     # noise = torch.randn(128,3,32,32)
     # buffer = SampleBuffer(net_T=opt.path_t)
     # routine
@@ -345,11 +336,7 @@ def main():
         print("==> training...")
 
         time1 = time.time()
-        if opt.datafree:
-            # buffer = SampleBuffer(net_T=opt.path_t)
-            train_acc, train_loss = train_distill_G(epoch, train_loader, module_list, criterion_list, optimizer_list, opt, buffer)
-        else:
-            train_acc, train_loss = train_distill(epoch, train_loader, module_list, criterion_list, optimizer_list, opt)
+        train_acc, train_loss = train_distill(epoch, train_loader, module_list, criterion_list, optimizer_list, opt)
         time2 = time.time()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
 
