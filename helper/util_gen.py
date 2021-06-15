@@ -5,7 +5,9 @@ import os
 import numpy as np
 import tqdm
 import random
+import math
 import torch.optim as optim
+import torch.nn.functional as F
 import torch.autograd as autograd
 from torch.distributions.dirichlet import Dirichlet
 import torchvision.utils as vutils
@@ -79,9 +81,11 @@ def get_sample_q(opts, device=None):
         init_sample, buffer_inds = sample_p_0(replay_buffer, bs=bs, y=y)
         x_k = torch.autograd.Variable(init_sample, requires_grad=True)
         # sgld
+        now_step_size = opts.step_size
         for k in range(n_steps):
-            f_prime = torch.autograd.grad(f(x_k, y=y).sum(), [x_k], retain_graph=True)[0]
-            x_k.data += opts.step_size * f_prime + 0.01 * torch.randn_like(x_k)
+            f_prime = torch.autograd.grad(f(x_k, y=y)[0].sum(), [x_k], retain_graph=True)[0]
+            x_k.data += now_step_size * f_prime + 0.01 * torch.randn_like(x_k)
+            now_step_size *= 0.99
             if open_debug:
                 plot('{}/debug_{}.png'.format(opts.save_folder, k))
                 exit(-1)
@@ -96,19 +100,19 @@ def get_sample_q(opts, device=None):
 def sliced_VR_score_matching(energy_net, samples, noise=None, detach=False, noise_type='radermacher', y=None):
     # Single MCMC step, for the matching of score function, i.e.,
     # s_m(x;\theta) = \nabla_{x} \log p_{\theta}(x)
-    dup_samples = samples.unsqueeze(0).expand(n_particles, *samples.shape).contiguous().view(-1, *samples.shape[1:])
+    dup_samples = samples.unsqueeze(0).expand(1, *samples.shape).contiguous().view(-1, *samples.shape[1:])
     dup_samples.requires_grad_(True)
     vectors = torch.randn_like(dup_samples)
 
-    logp = energy_net(dup_samples, y=y).sum()
+    logp = energy_net(dup_samples, y=y)[0].sum()
     grad1 = autograd.grad(logp, dup_samples, create_graph=True)[0]
     loss1 = torch.sum(grad1 * grad1, dim=-1) / 2.
     gradv = torch.sum(grad1 * vectors)
     grad2 = autograd.grad(gradv, dup_samples, create_graph=True)[0]
     loss2 = torch.sum(vectors * grad2, dim=-1)
 
-    loss1 = loss1.view(n_particles, -1).mean(dim=0)
-    loss2 = loss2.view(n_particles, -1).mean(dim=0)
+    loss1 = loss1.view(1, -1).mean(dim=0)
+    loss2 = loss2.view(1, -1).mean(dim=0)
 
     loss = loss1 + loss2
     return loss, logp
@@ -160,8 +164,8 @@ def cond_samples(model, replay_buffer, opt, fresh=False):
                 global_idx = i*meta_buffer_size+j
                 y = torch.LongTensor([i]).cuda()
                 plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), replay_buffer[global_idx])
-                output = model(replay_buffer[global_idx].unsqueeze(0).cuda()).mean()
-                output_xy = model(replay_buffer[global_idx].unsqueeze(0).cuda(), y=y).mean()
+                output = model(replay_buffer[global_idx].unsqueeze(0).cuda())[0].mean()
+                output_xy = model(replay_buffer[global_idx].unsqueeze(0).cuda(), y=y)[0].mean()
                 write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
                 f.write(write_str)
 
@@ -208,6 +212,18 @@ def update_lc_theta(opt, neg_out, x_q, logit, y_gt):
     l_backward = (lc * neg_out).mean() - lc.mean() * neg_out.mean()
     return l_backward
 
+def kl_div(mu1, mu2, std1, std2):
+    kl_1 = -0.5 * torch.sum(1 + std1 - mu1 ** 2 - std1.exp(), dim = 1)
+    kl_2 = -0.5 * torch.sum(1 + std2 - mu2 ** 2 - std2.exp(), dim = 1)
+    # p = torch.distributions.Normal(mu1, std1)
+    # q = torch.distributions.Normal(mu2, std2)
+
+    # log_qxz = q.log_prob(z)
+    # log_pz = p.log_prob(z)
+    # kl = (log_qxz - log_pz)
+    # kl = kl.sum(-1)
+    return kl_1 + kl_2
+
 def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     L = 0
     sample_q = get_sample_q(opt, x_p.device)
@@ -220,11 +236,15 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         # The process of get x_q~p_{\theta}(x), stochastic process of x*=argmin_{x}(E_{\theta}(x))
         # print(replay_buffer.shape, y_q.shape)
         x_q = sample_q(model, replay_buffer, y=y_q)
-        f_p = model(x_p)
-        f_q = model(x_q)
+        f_p, (mup, logp) = model(x_p, return_kl=True)
+        f_q, (muq, logq) = model(x_q, return_kl=True)
+        # stdp = torch.exp(logp / 2)
+        # stdq = torch.exp(logq / 2)
+        # print(stdp, stdq)
+        kl = kl_div(mup, muq, logp, logq)
         fp = f_p.mean()
         fq = f_q.mean()
-        l_p_x = -(fp-fq)
+        l_p_x = -(fp-fq) + opt.lmda_kl * kl.mean()
         L += opt.lmda_p_x * l_p_x
         ls.append(l_p_x)
         cache_p_x = (fp, fq)
@@ -236,8 +256,22 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     if opt.lmda_p_x_y > 0:
         x_q_lab = sample_q(model, replay_buffer, y=y_lab)
         # -E_{\theta}, bigger better.
-        fp, fq = model(x_lab, y_lab).mean(), model(x_q_lab, y_lab).mean()
+        fp, (mup, logp) = model(x_lab, y_lab, return_kl=True)
+        fq, (muq, logq) = model(x_q_lab, y_lab, return_kl=True)
+        # stdp = torch.exp(logp / 10)
+        # stdq = torch.exp(logq / 10)
+        # print(logp, logq)
+        # unbiased estimation of variance
+        # logvarp = fp.var().log()
+        # logvarq = fq.var().log()
+        # kl = kl_div(mup, muq, logp, logq)
+        # kl = logvarp - logvarq
+        # print(kl)
+        fp = fp.mean()
+        fq = fq.mean()
         l_p_x_y  = -(fp-fq)
+        # l_ssm, _ = sliced_VR_score_matching(model, x_lab, y=y_lab)
+        # l_p_x_y += opt.lmda_kl * l_ssm.mean()
         cache_p_x_y = (fp, fq)
         L += opt.lmda_p_x_y * l_p_x_y
         ls.append(l_p_x_y)
@@ -245,10 +279,10 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         ls.append(0.0)
 
     # P(y | x). Here needs the update of x.
-    logit = model(x_q, cls_mode=True)
+    logit = model(x_lab, cls_mode=True)
     # print(len(logit))
-    # l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
-    l_cls = -torch.log_softmax(logit, 1).mean()
+    l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
+    # l_cls = -torch.log_softmax(logit, 1).mean() - math.log(opt.n_cls)
     ls.append(l_cls)
     if model_t:
         l_c = update_lc_theta(opt, fq, x_q_lab, logit, y_lab)

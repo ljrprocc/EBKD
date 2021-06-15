@@ -62,6 +62,7 @@ def parse_option():
     parser.add_argument('--model_s', type=str, default='resnet8x4',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50' ])
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
+    parser.add_argument('--act', type=str, default='relu', choices=['relu', 'leaky', 'swish'])
     
     
     parser.add_argument('--path_t', type=str, default=None, help='teacher model snapshot')
@@ -72,6 +73,7 @@ def parse_option():
     parser.add_argument('--lmda_tv', default=2.5e-3, type=float, help='Hyperparameter for total variation loss.')
     parser.add_argument('--lmda_p_x', default=1., type=float, help='Hyperparameter for building p(x)')
     parser.add_argument('--lmda_p_x_y', default=0., type=float, help='Hyperparameter for building p(x,y)')
+    parser.add_argument('--lmda_kl', default=0.3, type=float, help='Hyperparameter for kl divergence.')
     parser.add_argument('--steps', default=20, type=int, help='Total MCMC steps for generating images.')
     parser.add_argument('--step_size', default=1, type=float, help='learning rate of MCMC updation.')
     parser.add_argument('--capcitiy', default=10000, type=int, help='Capcity of sample buffer.')
@@ -108,7 +110,7 @@ def parse_option():
 
     # opt.model_t = get_teacher_name(opt.path_t)
 
-    opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size{}_lpx_{}_lpxy_{}_energy_mode_{}_trial_{}'.format(opt.model, opt.dataset, opt.learning_rate, opt.weight_decay, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.trial)
+    opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}'.format(opt.model_s, opt.dataset, opt.learning_rate, opt.weight_decay, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial)
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
     if not os.path.isdir(opt.tb_folder):

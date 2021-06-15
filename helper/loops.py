@@ -649,7 +649,7 @@ def validate(val_loader, model, criterion, opt):
 
     return top1.avg, top5.avg, losses.avg
 
-def validate_G(model, replay_buffer, opt):
+def validate_G(model, replay_buffer, opt, eval_loader=None):
     """validation for generation stage. Also returns inception score(IS), Fischer Inception Distance(FID). Designed for further inference."""
     cond_samples(model, replay_buffer, opt)
     if not opt.save_grid:
@@ -663,3 +663,5 @@ def validate_G(model, replay_buffer, opt):
         )
         mean, var = inception_score(dataset, resize=True)
         print(mean, var)
+    if opt.jem_cls:
+        model.eval()

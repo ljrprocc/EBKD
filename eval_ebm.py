@@ -48,7 +48,6 @@ def parse_option():
 
     # Generator Details
     parser.add_argument('--g_steps', type=int, default=100, help='Updating steps for x')
-    parser.add_argument('--g_lr', type=float, default=0.025, help='Start learning rate of update_stpes')
 
     # dataset
     parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100', 'imagenet'], help='dataset')
@@ -81,6 +80,7 @@ def parse_option():
     parser.add_argument('--n_valid', type=int, default=5000, help='Set validation data.')
     parser.add_argument('--labels_per_class', type=int, default=-1, help='Number of labeled examples per class.')
     parser.add_argument('--save_grid', action="store_true", help="Flag for saving the generated results.")
+    parser.add_argument('--jem_cls', action="store_true", help="Flag for whether evaluate the classification result.")
 
     opt = parser.parse_args()
 

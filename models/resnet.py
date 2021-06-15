@@ -38,16 +38,28 @@ def get_norm(norm='none'):
         raise NotImplementedError('Son of a total bitch.')
     return norm_layer
 
+def get_act(act='relu'):
+    if act == 'relu':
+        relu_layer = nn.ReLU(True)
+    elif act == 'leaky':
+        relu_layer = nn.LeakyReLU(0.2, True)
+    elif act == 'swish':
+        relu_layer = nn.SiLU(True)
+    else:
+        raise NotImplementedError('Son of a total bitch.')
+    return relu_layer
+
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, is_last=False, norm='none'):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, is_last=False, norm='none', act='relu'):
         super(BasicBlock, self).__init__()
         norm_layer = get_norm(norm)
+        act_layer = get_act(act)
         self.is_last = is_last
         self.conv1 = conv3x3(inplanes, planes, stride)
         self.bn1 = norm_layer(planes)
-        self.relu = nn.ReLU(inplace=True)
+        self.relu = act_layer
         self.conv2 = conv3x3(planes, planes)
         self.bn2 = norm_layer(planes)
         self.downsample = downsample
@@ -120,9 +132,10 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, depth, num_filters, block_name='BasicBlock', num_classes=10, norm='none'):
+    def __init__(self, depth, num_filters, block_name='BasicBlock', num_classes=10, norm='none', act='relu'):
         super(ResNet, self).__init__()
         norm_layer = get_norm(norm)
+        act_layer = get_act(act)
         # Model type specifies number of layers for CIFAR-10 model
         if block_name.lower() == 'basicblock':
             assert (depth - 2) % 6 == 0, 'When use basicblock, depth should be 6n+2, e.g. 20, 32, 44, 56, 110, 1202'
@@ -139,11 +152,11 @@ class ResNet(nn.Module):
         self.conv1 = nn.Conv2d(3, num_filters[0], kernel_size=3, padding=1,
                                bias=False)
         self.bn1 = norm_layer(num_filters[0])
-        self.relu = nn.ReLU(inplace=True)
+        self.relu = act_layer
         # print(block)
-        self.layer1 = self._make_layer(block, num_filters[1], n, stride=1, norm=norm)
-        self.layer2 = self._make_layer(block, num_filters[2], n, stride=2, norm=norm)
-        self.layer3 = self._make_layer(block, num_filters[3], n, stride=2, norm=norm)
+        self.layer1 = self._make_layer(block, num_filters[1], n, stride=1, norm=norm, act=act)
+        self.layer2 = self._make_layer(block, num_filters[2], n, stride=2, norm=norm, act=act)
+        self.layer3 = self._make_layer(block, num_filters[3], n, stride=2, norm=norm, act=act)
         self.avgpool = nn.AvgPool2d(8)
         self.fc = nn.Linear(num_filters[3] * block.expansion, num_classes)
         self.last_dim = num_filters[3] * block.expansion
@@ -155,7 +168,7 @@ class ResNet(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-    def _make_layer(self, block, planes, blocks, stride=1, norm='none'):
+    def _make_layer(self, block, planes, blocks, stride=1, norm='none', act='relu'):
         norm_layer = get_norm(norm)
         # print(block.expansion)
         downsample = None
@@ -167,10 +180,10 @@ class ResNet(nn.Module):
             )
 
         layers = list([])
-        layers.append(block(self.inplanes, planes, stride, downsample, is_last=(blocks == 1), norm=norm))
+        layers.append(block(self.inplanes, planes, stride, downsample, is_last=(blocks == 1), norm=norm, act=act))
         self.inplanes = planes * block.expansion
         for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes, is_last=(i == blocks-1), norm=norm))
+            layers.append(block(self.inplanes, planes, is_last=(i == blocks-1), norm=norm, act=act))
 
         return nn.Sequential(*layers)
 

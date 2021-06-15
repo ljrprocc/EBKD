@@ -276,12 +276,26 @@ class FF(nn.Module):
 class CCF(FF):
     def __init__(self, model, n_cls=10):
         super(CCF, self).__init__(model=model, n_cls=n_cls)
+        self.logvar_fc = nn.Linear(self.f.last_dim, 1)
+        self.mu_fc = nn.Linear(self.f.last_dim, 100)
         # self.is_feat = is_feat
 
-    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False):
+    def kl_div(self, z, mu, std):
+        p = torch.distributions.Normal(torch.zero_like(mu), torch.ones_like(std))
+        q = torch.distributions.Normal(mu, std)
+
+        log_qzx = q.log_prob(z)
+        log_pz = p.log_prob(z)
+
+        kl = log_qzx - log_pz
+        kl = kl.sum(-1)
+        return kl
+
+    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False, return_kl=False):
         #print(cls_mode, is_feat, preact, y)
         
         feats, logits = super().forward(x, y=None, cls_mode=True, is_feat=True, preact=preact)
+        
         # feat = feats[-1]
         if cls_mode:
             # print(is_feat)
@@ -289,17 +303,30 @@ class CCF(FF):
                 return logits
             else:
                 return feats, logits
+        
+        return_list = []
         if is_feat:
             if y is None:
-                return feats, logits.logsumexp(1)
+                return_list = [feats, logits.logsumexp(1)]
             else:
-                return feats, torch.gather(logits, 1, y[:, None])
+                return_list = [feats, torch.gather(logits, 1, y[:, None])]
         else:
             # logits = super().forward(x=x, y=y, cls_mode=False)
             # print(logits.requires_grad)
             if y is None:
-                return logits.logsumexp(1)
+                return_list =[logits.logsumexp(1)]
             else:
-                return torch.gather(logits, 1, y[:, None])
+                return_list =[torch.gather(logits, 1, y[:, None])]
+
+        if return_kl:
+            log_var = self.logvar_fc(F.relu(feats[-1]))
+            # mu = self.mu_fc(F.relu(feats[-1]))
+            # std = torch.exp(log_var / 2)
+            # q = torch.distributions.Normal(mu, std)
+            # z = q.rsample()
+            # kl_loss = self.kl_div(z, mu, std)
+            return_list.append((mu, log_var))
+            # return_list.append(log_var)
+        return return_list
 
 
