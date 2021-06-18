@@ -282,6 +282,8 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     logit = model(x_lab, cls_mode=True)
     # print(len(logit))
     l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
+    correct = torch.sum(torch.argmax(logit, 1) == y_lab).item()
+    acc = correct / x_p.size(0)
     # l_cls = -torch.log_softmax(logit, 1).mean() - math.log(opt.n_cls)
     ls.append(l_cls)
     if model_t:
@@ -296,7 +298,7 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         print('Bad Result.')
         raise ValueError('Not converged.')
     # print(L)
-    return L, cache_p_x, cache_p_x_y, ls
+    return L, cache_p_x, cache_p_x_y, acc, ls
 
 
 def create_similarity(netT_path, scale=1):

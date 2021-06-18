@@ -320,7 +320,7 @@ class CCF(FF):
 
         if return_kl:
             log_var = self.logvar_fc(F.relu(feats[-1]))
-            # mu = self.mu_fc(F.relu(feats[-1]))
+            mu = self.mu_fc(F.relu(feats[-1]))
             # std = torch.exp(log_var / 2)
             # q = torch.distributions.Normal(mu, std)
             # z = q.rsample()
