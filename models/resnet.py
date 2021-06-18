@@ -277,6 +277,14 @@ def resnet20x10(**kwargs):
     return ResNet(20, [32, 160, 320, 640], 'basicblock', **kwargs)
 
 
+def resnet20x10(**kwargs):
+    return ResNet(20, [32, 160, 320, 640], 'basicblock', **kwargs)
+
+
+def resnet26x10(**kwargs):
+    return ResNet(26, [32, 160, 320, 640], 'basicblock', **kwargs)
+
+
 if __name__ == '__main__':
     import torch
 
