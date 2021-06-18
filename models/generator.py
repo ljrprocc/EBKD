@@ -276,7 +276,7 @@ class FF(nn.Module):
 class CCF(FF):
     def __init__(self, model, n_cls=10):
         super(CCF, self).__init__(model=model, n_cls=n_cls)
-        self.logvar_fc = nn.Linear(self.f.last_dim, 1)
+        self.logvar_fc = nn.Linear(self.f.last_dim, 100)
         self.mu_fc = nn.Linear(self.f.last_dim, 100)
         # self.is_feat = is_feat
 
@@ -320,7 +320,7 @@ class CCF(FF):
 
         if return_kl:
             log_var = self.logvar_fc(F.relu(feats[-1]))
-            # mu = self.mu_fc(F.relu(feats[-1]))
+            mu = self.mu_fc(F.relu(feats[-1]))
             # std = torch.exp(log_var / 2)
             # q = torch.distributions.Normal(mu, std)
             # z = q.rsample()

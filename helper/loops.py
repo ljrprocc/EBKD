@@ -95,13 +95,16 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
     fqxs = AverageMeter()
     fpxys = AverageMeter()
     fqxys = AverageMeter()
+    accs = AverageMeter()
     # noise = torch.randn(128, 3, 32, 32)
     train_loader, train_labeled_loader = train_loader
     # criterion is tv loss
     plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
 
     end = time.time()
-    sample_q = get_sample_q(opt)
+    sample_q, _ = get_sample_q(opt)
+    correct = 0
+    total_length = 0
     for idx, (input, target) in enumerate(train_loader):
         if idx <= opt.warmup_iters:
             lr = opt.learning_rate * idx / float(opt.warmup_iters)
@@ -125,7 +128,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
         optimizer.zero_grad()
         model.zero_grad()
         if opt.energy == 'mcmc':
-            loss_ebm, cache_p_x, cache_p_y, ls = update_theta(opt, buffer, model, input, x_lab, y_lab, model_t=model_t)    
+            loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model, input, x_lab, y_lab, model_t=model_t)    
         elif opt.energy == 'ssm':
             loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
         else:
@@ -153,6 +156,8 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
 
         # tensorboard logger
         l_p_x, l_p_x_y, l_cls = ls
+        acc = torch.sum(torch.argmax(logit, 1) == y_lab).item() / input.size(0)
+        accs.update(acc, input.size(0))
         global_iter = epoch * len(train_loader) + idx
         if global_iter % opt.print_freq == 0:
             logger.log_value('l_p_x', l_p_x, global_iter)
@@ -171,6 +176,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
                 if opt.energy != 'ssm':
                     string += 'p(x, y) f(x+) {fpxy.val:.4f} ({fpxy.avg:.4f})\t'.format(fpxy=fpxys)
                 string += 'f(x-) {fqxy.val:.4f} ({fqxy.avg:.4f})\n'.format(fqxy=fqxys)
+            string += 'Acc: {accs.val:.4f} ({accs.avg:.4f})\n'.format(accs=accs)
             print(string)
             sys.stdout.flush()
             if opt.plot_uncond:

@@ -1,4 +1,4 @@
-from .resnet import resnet8, resnet14, resnet20, resnet32, resnet44, resnet56, resnet110, resnet8x4, resnet32x4
+from .resnet import resnet8, resnet14, resnet20, resnet32, resnet44, resnet56, resnet110, resnet8x4, resnet32x4, resnet20x10
 # If you want to train resnet for ImageNet from sractch
 from .resnetv2 import ResNet50, ResNet18
 from .pretrained_resnet import resnet50, resnet18
@@ -20,6 +20,7 @@ model_dict = {
     'resnet110': resnet110,
     'resnet8x4': resnet8x4,
     'resnet32x4': resnet32x4,
+    'resnet20x10': resnet20x10,
     'ResNet50': resnet50,
     'ResNet18': resnet18,
     'ResNet50cifar100': ResNet50,

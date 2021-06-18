@@ -30,7 +30,7 @@ def get_data_folder():
     elif hostname.startswith('yonglong-home'):
         data_folder = '/home/yonglong/Data/data'
     else:
-        data_folder = '/data/lijingru/img_sample_eval/'
+        data_folder = '/data/lijingru/img_sample_eval_10000/'
 
     if not os.path.isdir(data_folder):
         os.makedirs(data_folder)
@@ -105,8 +105,8 @@ def get_cifar100_dataloaders(opt, batch_size=128, num_workers=8, is_instance=Fal
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     ]
     if use_subdataset:
-        train_list += [lambda x: x + 0.03 * torch.randn_like(x)]
-        test_list += [lambda x: x + 0.03 * torch.randn_like(x)]
+        train_list += [lambda x: x + 0.05 * torch.randn_like(x)]
+        test_list += [lambda x: x + 0.05 * torch.randn_like(x)]
 
     train_transform = transforms.Compose(train_list)
     test_transform = transforms.Compose(test_list)

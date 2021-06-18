@@ -45,7 +45,7 @@ def getDirichl(bs, num_classes, sim_matrix, scale):
 
     return X / num_classes
 
-def get_sample_q(opts, device=None):
+def get_sample_q(opts, device=None, open_debug=False):
     # bs = opt.capcitiy
     nc = 3
     if opts.dataset == 'cifar100':
@@ -81,21 +81,47 @@ def get_sample_q(opts, device=None):
         init_sample, buffer_inds = sample_p_0(replay_buffer, bs=bs, y=y)
         x_k = torch.autograd.Variable(init_sample, requires_grad=True)
         # sgld
+        samples = []
         now_step_size = opts.step_size
         for k in range(n_steps):
             f_prime = torch.autograd.grad(f(x_k, y=y)[0].sum(), [x_k], retain_graph=True)[0]
             x_k.data += now_step_size * f_prime + 0.01 * torch.randn_like(x_k)
             now_step_size *= 0.99
             if open_debug:
-                plot('{}/debug_{}.png'.format(opts.save_folder, k))
-                exit(-1)
+                samples.append(x_k.detach())
+                # plot('{}/debug_{}.png'.format(opts.save_folder, k))
+                # exit(-1)
         f.train()
         final_samples = x_k.detach()
         # update replay buffer
         if len(replay_buffer) > 0:
             replay_buffer[buffer_inds] = final_samples.cpu()
+        if open_debug:
+            return final_samples, samples
+        else:
+            return final_samples
+
+    def sample_q_xy(f, replay_buffer, y=None, n_steps=opts.g_steps):
+        f.eval()
+        bs = opts.batch_size if y is None else y.size(0)
+        init_sample, buffer_inds = sample_p_0(replay_buffer, bs=bs, y=y)
+        x_k = torch.autograd.Variable(init_sample, requires_grad=True)
+
+        now_step_size = opts.step_size
+        for k in range(n_steps):
+            f_prime = torch.autograd.grad(f(x_k, cls_mode=True).sum(0), [x_k], grad_outputs=torch.ones_like(opt.n_cls))
+            print(f_prime.shape)
+            x_k.data += now_step_size * f_prime + 0.01 * torch.randn_like(x_k)
+            now_step_size *= 0.99
+        
+        f.train()
+        final_samples = x_k.detach()
+
+        if len(replay_buffer) > 0:
+            replay_buffer[buffer_inds] = final_samples.cpu()
         return final_samples
-    return sample_q
+
+    return sample_q, sample_q_xy
     
 def sliced_VR_score_matching(energy_net, samples, noise=None, detach=False, noise_type='radermacher', y=None):
     # Single MCMC step, for the matching of score function, i.e.,
@@ -226,7 +252,7 @@ def kl_div(mu1, mu2, std1, std2):
 
 def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     L = 0
-    sample_q = get_sample_q(opt, x_p.device)
+    sample_q, sample_q_xy = get_sample_q(opt, x_p.device)
     cache_p_x = None
     cache_p_x_y = None
     ls = []
@@ -279,16 +305,24 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         ls.append(0.0)
 
     # P(y | x). Here needs the update of x.
-    logit = model(x_lab, cls_mode=True)
-    # print(len(logit))
-    l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
+    
+    if opt.cls == 'cls':
+        # print(len(logit))
+        logit = model(x_lab, cls_mode=True)
+        l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
+        L += l_cls
+    else:
+        logit = model(x_q_lab, cls_mode=True)
+        l_cls = -torch.gather(torch.log_softmax(logit, 1), 1, y_lab[:, None]).mean() - math.log(opt.n_cls)
+        L += l_cls
+        # l_cls.backward
     # l_cls = -torch.log_softmax(logit, 1).mean() - math.log(opt.n_cls)
     ls.append(l_cls)
     if model_t:
         l_c = update_lc_theta(opt, fq, x_q_lab, logit, y_lab)
         L += l_c
     # print(l_cls)
-    L += l_cls
+    # L += l_cls
     
     L.backward()
     # print(l_p_x, l_cls)
@@ -296,7 +330,7 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         print('Bad Result.')
         raise ValueError('Not converged.')
     # print(L)
-    return L, cache_p_x, cache_p_x_y, ls
+    return L, cache_p_x, cache_p_x_y, logit, ls
 
 
 def create_similarity(netT_path, scale=1):

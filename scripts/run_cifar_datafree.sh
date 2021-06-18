@@ -2,5 +2,5 @@
 # CUDA_VISIBLE_DEVICES=2 python train_student.py --batch_size 128 --model_s resnet8x4  --distill ebkd -r 0 -a 0 -b 1 --path_t ./save/models/resnet32x4_vanilla/ckpt_epoch_240.pth  --trial 1 --num_workers 4 --learning_rate 0.05 --epochs 300
 # for (( i=0; i<10; i=i+1 )); do
 # echo "**************** $i th training**************"
-CUDA_VISIBLE_DEVICES=4 python train_student.py --batch_size 128 --model_s resnet8x4  --distill kd -r 0.5 -a 0.5 -b 0 --path_t ./save/models/resnet32x4_vanilla/ckpt_epoch_240.pth  --trial 0_df --num_workers 4 --learning_rate 0.01 --epochs 300 --G_step 1 --datafree --norm batch
+CUDA_VISIBLE_DEVICES=0 python train_student.py --batch_size 128 --model_s resnet8x4  --distill kd -r 0.4 -a 0.6 -b 0 --path_t ./save/models/resnet32x4_vanilla/ckpt_epoch_240.pth  --trial 0_df_10000 --num_workers 4 --learning_rate 0.01 --epochs 300 --datafree --norm batch
 # done
