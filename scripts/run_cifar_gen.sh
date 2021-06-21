@@ -10,8 +10,4 @@
 
 # python train_teacher.py --model vgg13
 
-<<<<<<< HEAD
-CUDA_VISIBLE_DEVICES=2 python train_ebm.py --model_s resnet20x10 --trial 2 --capcitiy 10000 --path_t ./save/models/resnet32x4_vanilla/ckpt_epoch_240.pth --g_steps 20 --save_freq 25 --epochs 500 --lr_decay_epochs 100,250 --plot_cond --learning_rate 0.0001 --batch_size 128  --energy mcmc --warmup_iters 1000 --lmda_p_x_y 1. --lmda_p_x 0 --step_size 1 --act swish --num_workers 4 --load_buffer_path /data/lijingru/EBKD/save/student_model/resnet20x10_cifar100_lr_0.0001_decay_0.0_buffer_size_10000_lpx_0.0_lpxy_1.0_energy_mode_mcmc_step_size_2.0_trial_2_cls_mode_cls/res_epoch_100.pts --init_epochs 100
-=======
-CUDA_VISIBLE_DEVICES=1 python train_ebm.py --model_s resnet26x10 --trial 2 --capcitiy 10000 --path_t ./save/models/resnet32x4_vanilla/ckpt_epoch_240.pth --g_steps 20 --save_freq 25 --epochs 500 --lr_decay_epochs 100,250 --plot_cond --learning_rate 0.0001 --batch_size 128  --energy mcmc --warmup_iters 1000 --lmda_p_x_y 1. --lmda_p_x 0 --step_size 1 --act swish --num_workers 4
->>>>>>> 8e951f3e119edad010d1630f914b50b5baf05e10
+CUDA_VISIBLE_DEVICES=4 python train_ebm.py --model_s resnet20x10 --trial 2 --capcitiy 10000 --path_t ./save/models/resnet32x4_vanilla/ckpt_epoch_240.pth --g_steps 20 --save_freq 10 --epochs 500 --lr_decay_epochs 100,250 --plot_cond --learning_rate 0.00005 --batch_size 128  --energy mcmc --warmup_iters 1000 --lmda_p_x_y 1. --lmda_p_x 0 --step_size 1 --act swish --num_workers 4 --load_buffer_path /data/lijingru/EBKD/save/student_model/resnet20x10_cifar100_lr_5e-05_decay_0.0_buffer_size_10000_lpx_0.0_lpxy_1.0_energy_mode_mcmc_step_size_1.0_trial_2_cls_mode_cls/res_epoch_280.pts --init_epochs 280

@@ -128,11 +128,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
         optimizer.zero_grad()
         model.zero_grad()
         if opt.energy == 'mcmc':
-<<<<<<< HEAD
             loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model, input, x_lab, y_lab, model_t=model_t)    
-=======
-            loss_ebm, cache_p_x, cache_p_y, acc, ls = update_theta(opt, buffer, model, input, x_lab, y_lab, model_t=model_t)    
->>>>>>> 8e951f3e119edad010d1630f914b50b5baf05e10
         elif opt.energy == 'ssm':
             loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
         else:
@@ -181,11 +177,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
                 if opt.energy != 'ssm':
                     string += 'p(x, y) f(x+) {fpxy.val:.4f} ({fpxy.avg:.4f})\t'.format(fpxy=fpxys)
                 string += 'f(x-) {fqxy.val:.4f} ({fqxy.avg:.4f})\n'.format(fqxy=fqxys)
-<<<<<<< HEAD
             string += 'Acc: {accs.val:.4f} ({accs.avg:.4f})\n'.format(accs=accs)
-=======
-            string += 'Acc: {accs.val:.4f} ({accs.val:.4f})\n'.format(accs=accs)
->>>>>>> 8e951f3e119edad010d1630f914b50b5baf05e10
             print(string)
             sys.stdout.flush()
             if opt.plot_uncond:

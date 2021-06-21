@@ -284,6 +284,7 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         # -E_{\theta}, bigger better.
         fp, (mup, logp) = model(x_lab, y_lab, return_kl=True)
         fq, (muq, logq) = model(x_q_lab, y_lab, return_kl=True)
+        norms = torch.norm(fp, -1) + torch.norm(fq, -1)
         # stdp = torch.exp(logp / 10)
         # stdq = torch.exp(logq / 10)
         # print(logp, logq)
@@ -295,7 +296,7 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         # print(kl)
         fp = fp.mean()
         fq = fq.mean()
-        l_p_x_y  = -(fp-fq)
+        l_p_x_y  = -(fp-fq) + 0.1 * norms.mean()
         # l_ssm, _ = sliced_VR_score_matching(model, x_lab, y=y_lab)
         # l_p_x_y += opt.lmda_kl * l_ssm.mean()
         cache_p_x_y = (fp, fq)
@@ -305,7 +306,6 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         ls.append(0.0)
 
     # P(y | x). Here needs the update of x.
-<<<<<<< HEAD
     
     if opt.cls == 'cls':
         # print(len(logit))
@@ -317,13 +317,6 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         l_cls = -torch.gather(torch.log_softmax(logit, 1), 1, y_lab[:, None]).mean() - math.log(opt.n_cls)
         L += l_cls
         # l_cls.backward
-=======
-    logit = model(x_lab, cls_mode=True)
-    # print(len(logit))
-    l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
-    correct = torch.sum(torch.argmax(logit, 1) == y_lab).item()
-    acc = correct / x_p.size(0)
->>>>>>> 8e951f3e119edad010d1630f914b50b5baf05e10
     # l_cls = -torch.log_softmax(logit, 1).mean() - math.log(opt.n_cls)
     ls.append(l_cls)
     if model_t:
@@ -338,11 +331,7 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         print('Bad Result.')
         raise ValueError('Not converged.')
     # print(L)
-<<<<<<< HEAD
     return L, cache_p_x, cache_p_x_y, logit, ls
-=======
-    return L, cache_p_x, cache_p_x_y, acc, ls
->>>>>>> 8e951f3e119edad010d1630f914b50b5baf05e10
 
 
 def create_similarity(netT_path, scale=1):
