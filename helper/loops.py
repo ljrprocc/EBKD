@@ -13,7 +13,7 @@ sys.path.append('..')
 from datasets.cifar100 import CIFAR100Gen
  
 from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras, inception_score
-from .util_gen import get_replay_buffer, update_theta, ssm_sample
+from .util_gen import get_replay_buffer, update_theta, ssm_sample, getDirichl
 from .util_gen import get_sample_q, cond_samples
 
 

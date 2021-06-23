@@ -20,7 +20,7 @@ from datasets.cifar100 import get_cifar100_dataloaders, get_cifar100_dataloaders
 from datasets.imagenet import get_imagenet_dataloader, get_dataloader_sample
 
 from helper.util import adjust_learning_rate, TVLoss
-from helper.util_gen import get_replay_buffer
+from helper.util_gen import get_replay_buffer, getDirichl
 
 from helper.loops import train_generator
 from helper.pretrain import init
@@ -188,7 +188,8 @@ def main():
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
     buffer, _ = get_replay_buffer(opt, model=model_score)
-
+    opt.y = getDirichl(1000, opt.n_cls, opt.path_t).mean(0)
+    print(opt.y)
     # routine
     for epoch in range(opt.init_epochs+1, opt.epochs + 1):
         if epoch in opt.lr_decay_epochs:

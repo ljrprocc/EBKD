@@ -291,32 +291,37 @@ class CCF(FF):
         kl = kl.sum(-1)
         return kl
 
-    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False, return_kl=False):
+    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False, return_kl=False, py=None):
         #print(cls_mode, is_feat, preact, y)
         
         feats, logits = super().forward(x, y=None, cls_mode=True, is_feat=True, preact=preact)
         
         # feat = feats[-1]
+        if py is not None:
+            logits = py.log() / 10 * logits
         if cls_mode:
             # print(is_feat)
             if not is_feat:
                 return logits
             else:
                 return feats, logits
-        
         return_list = []
+        if y is not None:
+            pxy = torch.gather(logits, 1, y[:, None])
+        else:
+            px = torch.log(logits.exp().sum(1))
         if is_feat:
             if y is None:
-                return_list = [feats, logits.logsumexp(1)]
+                return_list = [feats, px]
             else:
-                return_list = [feats, torch.gather(logits, 1, y[:, None])]
+                return_list = [feats, pxy]
         else:
             # logits = super().forward(x=x, y=y, cls_mode=False)
             # print(logits.requires_grad)
             if y is None:
-                return_list =[logits.logsumexp(1)]
+                return_list =[px]
             else:
-                return_list =[torch.gather(logits, 1, y[:, None])]
+                return_list =[pxy]
 
         if return_kl:
             log_var = self.logvar_fc(F.relu(feats[-1]))
