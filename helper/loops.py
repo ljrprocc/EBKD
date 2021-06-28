@@ -163,6 +163,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
             logger.log_value('l_p_x', l_p_x, global_iter)
             logger.log_value('l_p_x_y', l_p_x_y, global_iter)
             logger.log_value('l_cls', l_cls, global_iter)
+            logger.log_value('accuracy', acc, global_iter)
         
         accs.update(acc, input.size(0))
         # print info

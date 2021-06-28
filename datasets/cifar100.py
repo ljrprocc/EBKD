@@ -105,8 +105,8 @@ def get_cifar100_dataloaders(opt, batch_size=128, num_workers=8, is_instance=Fal
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     ]
     if use_subdataset:
-        train_list += [lambda x: x + 0.05 * torch.randn_like(x)]
-        test_list += [lambda x: x + 0.05 * torch.randn_like(x)]
+        train_list += [lambda x: x + opt.data_noise * torch.randn_like(x)]
+        test_list += [lambda x: x + opt.data_noise * torch.randn_like(x)]
 
     train_transform = transforms.Compose(train_list)
     test_transform = transforms.Compose(test_list)

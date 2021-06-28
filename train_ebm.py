@@ -38,6 +38,7 @@ def parse_option():
     parser.add_argument('--epochs', type=int, default=240, help='number of training epochs')
     parser.add_argument('--init_epochs', type=int, default=0, help='init training for two-stage methods and resume')
     parser.add_argument('--warmup_iters', type=int, default=200, help="number of iters to linearly increase learning rate, -1 set no warmup.")
+    parser.add_argument('--data_noise', type=float, default=0.03, help="The adding noise for sampling data point x~p_data.")
 
     # optimization
     parser.add_argument('--learning_rate', type=float, default=0.01, help='learning rate')
@@ -60,7 +61,7 @@ def parse_option():
     parser.add_argument('--model', type=str, default='resnet110',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet20x10' ])
     parser.add_argument('--model_s', type=str, default='resnet8x4',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50' ])
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10'])
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
     parser.add_argument('--act', type=str, default='relu', choices=['relu', 'leaky', 'swish'])
     
@@ -177,19 +178,19 @@ def main():
     model_list = [model, model_score]
     # optimizer = nn.DataParallel(optimizer)
     criterion = TVLoss()
-    
     if torch.cuda.is_available():
         model = model.cuda()
         model_score = model_score.cuda()
         criterion = criterion.cuda()
         cudnns.benchmark = True
 
+
     # tensorboard
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
     buffer, _ = get_replay_buffer(opt, model=model_score)
-    opt.y = getDirichl(1000, opt.n_cls, opt.path_t).mean(0)
-    print(opt.y)
+    opt.y = getDirichl(opt.path_t)
+    # print(opt.y)
     # routine
     for epoch in range(opt.init_epochs+1, opt.epochs + 1):
         if epoch in opt.lr_decay_epochs:
@@ -220,4 +221,6 @@ def main():
             torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_epoch_{epoch}.pts'.format(epoch=epoch)))
 
 if __name__ == '__main__':
+    torch.manual_seed(1234)
+    torch.cuda.manual_seed(1234)
     main()

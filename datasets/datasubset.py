@@ -26,7 +26,7 @@ def get_dataloaders_and_datasets(base_dataset, test_base_dataset, opt):
     full_train = base_dataset
     all_inds = list(range(len(full_train)))
     # Set seed
-    np.random.seed(5432)
+    np.random.seed(1234)
     # Shuffle
     np.random.shuffle(all_inds)
     if opt.n_valid is not None:

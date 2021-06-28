@@ -33,18 +33,24 @@ def get_replay_buffer(opt, model=None):
             model.load_state_dict(ckpt_dict["model_state_dict"])
     return replay_buffer, model
 
-def getDirichl(bs, num_classes, net_path, scale=1, sim_scale=1):
-    sim_matrix = create_similarity(net_path, scale=scale)
-    X = torch.zeros(bs, num_classes).to(sim_matrix.device)
-    for i in range(num_classes):
-        alpha = sim_matrix[i, :]
-        alpha_normalized = (alpha - torch.min(alpha)) / (torch.max(alpha) - torch.min(alpha))
-        alpha_normalized = alpha_normalized * scale + 0.000001
-        # print(alpha_normalized.device)
-        diri = Dirichlet(alpha_normalized)
-        X += diri.rsample((bs, ))
+def getDirichl(net_path, scale=1, sim_scale=1):
+    sim_matrix = create_similarity(net_path, scale=sim_scale)
+    # X = torch.zeros(bs, num_classes).to(sim_matrix.device)
+    c_n = (sim_matrix - sim_matrix.min(1)[0]) / (sim_matrix.max(1)[0] - sim_matrix.min(1)[0])
+    c_n = c_n * scale + 0.000001
+    diri = Dirichlet(c_n)
+    X = diri.rsample()
+    return X.mean(0)
 
-    return X / num_classes
+    # for i in range(num_classes):
+    #     alpha = sim_matrix[i, :]
+    #     alpha_normalized = (alpha - torch.min(alpha)) / (torch.max(alpha) - torch.min(alpha))
+    #     alpha_normalized = alpha_normalized * scale + 0.000001
+    #     # print(alpha_normalized.device)
+    #     diri = Dirichlet(alpha_normalized)
+    #     X += diri.rsample((bs, ))
+
+    # return X / num_classes
 
 def get_sample_q(opts, device=None, open_debug=False):
     # bs = opt.capcitiy
@@ -283,8 +289,8 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     if opt.lmda_p_x_y > 0:
         x_q_lab = sample_q(model, replay_buffer, y=y_lab)
         # -E_{\theta}, bigger better.
-        fp, (mup, logp) = model(x_lab, y_lab, return_kl=True, py=opt.y)
-        fq, (muq, logq) = model(x_q_lab, y_lab, return_kl=True, py=opt.y)
+        fp, (mup, logp) = model(x_lab, y_lab, return_kl=True)
+        fq, (muq, logq) = model(x_q_lab, y_lab, return_kl=True)
         norms = torch.norm(fp, -1) + torch.norm(fq, -1)
         # stdp = torch.exp(logp / 10)
         # stdq = torch.exp(logq / 10)
@@ -297,7 +303,7 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         # print(kl)
         fp = fp.mean()
         fq = fq.mean()
-        l_p_x_y  = -(fp-fq) + 0.1 * (fp**2 + fq**2)
+        l_p_x_y  = -(fp-fq)
         # l_ssm, _ = sliced_VR_score_matching(model, x_lab, y=y_lab)
         # l_p_x_y += opt.lmda_kl * l_ssm.mean()
         cache_p_x_y = (fp, fq)
@@ -310,11 +316,11 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     
     if opt.cls == 'cls':
         # print(len(logit))
-        logit = model(x_lab, cls_mode=True, py=opt.y)
+        logit = model(x_lab, cls_mode=True)
         l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
         L += l_cls
     else:
-        logit = model(x_q_lab, cls_mode=True, py=opt.y)
+        logit = model(x_q_lab, cls_mode=True)
         l_cls = -torch.gather(torch.log_softmax(logit, 1), 1, y_lab[:, None]).mean() - math.log(opt.n_cls)
         L += l_cls
         # l_cls.backward

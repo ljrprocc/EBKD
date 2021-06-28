@@ -276,7 +276,7 @@ class FF(nn.Module):
 class CCF(FF):
     def __init__(self, model, n_cls=10):
         super(CCF, self).__init__(model=model, n_cls=n_cls)
-        self.logvar_fc = nn.Linear(self.f.last_dim, 1)
+        self.logvar_fc = nn.Linear(self.f.last_dim, 100)
         self.mu_fc = nn.Linear(self.f.last_dim, 100)
         # self.is_feat = is_feat
 
@@ -298,7 +298,7 @@ class CCF(FF):
         
         # feat = feats[-1]
         if py is not None:
-            logits = py.log() / 10 * logits
+            logits = py.log() + logits
         if cls_mode:
             # print(is_feat)
             if not is_feat:
