@@ -276,7 +276,7 @@ class FF(nn.Module):
 class CCF(FF):
     def __init__(self, model, n_cls=10):
         super(CCF, self).__init__(model=model, n_cls=n_cls)
-        self.logvar_fc = nn.Linear(self.f.last_dim, 100)
+        self.logvar_fc = nn.Linear(self.f.last_dim, 1)
         self.mu_fc = nn.Linear(self.f.last_dim, 100)
         # self.is_feat = is_feat
 

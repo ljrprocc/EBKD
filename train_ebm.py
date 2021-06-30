@@ -190,7 +190,7 @@ def main():
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
     buffer, _ = get_replay_buffer(opt, model=model_score)
     opt.y = getDirichl(opt.path_t)
-    # print(opt.y)
+    print(opt.y)
     # routine
     for epoch in range(opt.init_epochs+1, opt.epochs + 1):
         if epoch in opt.lr_decay_epochs:

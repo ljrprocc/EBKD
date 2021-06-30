@@ -77,7 +77,7 @@ def get_sample_q(opts, device=None, open_debug=False):
         samples = choose_random * random_samples + (1 - choose_random) * buffer_samples
         return samples.cuda(), inds
 
-    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False):
+    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False, open_clip_grad=None):
         """this func takes in replay_buffer now so we have the option to sample from
         scratch (i.e. replay_buffer==[]).  See test_wrn_ebm.py for example.
         """
@@ -96,6 +96,8 @@ def get_sample_q(opts, device=None, open_debug=False):
             now_step_size *= 0.99
             if open_debug:
                 samples.append(x_k.detach())
+            if open_clip_grad:
+                torch.nn.utils.clip_grad_norm_(f.parameters(), max_norm=open_clip_grad)
                 # plot('{}/debug_{}.png'.format(opts.save_folder, k))
                 # exit(-1)
         f.train()
@@ -159,8 +161,8 @@ def ssm_sample(opt, replay_buffer, model, x_p, x_lab, y_lab):
     score_q_xy = 0
     if opt.lmda_p_x > 0:
         y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(x_p.device)
-        x_q = sample_q(model, replay_buffer, y=y_q)
-        loss_x, score_qx = sliced_VR_score_matching(model, x_q)
+        x_q = sample_q(model, replay_buffer, y=y_q, open_clip_grad=0.1)
+        loss_x, score_qx = sliced_VR_score_matching(model, x_q, open_clip_grad=0.1)
         L += loss_x * opt.lmda_p_x
     if opt.lmda_p_x_y > 0:
         x_q_lab = sample_q(model, replay_buffer, y=y_lab)
@@ -268,7 +270,7 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(x_p.device)
         # The process of get x_q~p_{\theta}(x), stochastic process of x*=argmin_{x}(E_{\theta}(x))
         # print(replay_buffer.shape, y_q.shape)
-        x_q = sample_q(model, replay_buffer, y=y_q)
+        x_q = sample_q(model, replay_buffer, y=y_q,open_clip_grad=0.1)
         f_p, (mup, logp) = model(x_p, return_kl=True)
         f_q, (muq, logq) = model(x_q, return_kl=True)
         # stdp = torch.exp(logp / 2)
@@ -287,7 +289,7 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     # Followed by the idea of jem
 
     if opt.lmda_p_x_y > 0:
-        x_q_lab = sample_q(model, replay_buffer, y=y_lab)
+        x_q_lab = sample_q(model, replay_buffer, y=y_lab, open_clip_grad=0.1)
         # -E_{\theta}, bigger better.
         fp, (mup, logp) = model(x_lab, y_lab, return_kl=True)
         fq, (muq, logq) = model(x_q_lab, y_lab, return_kl=True)
