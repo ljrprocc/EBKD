@@ -236,23 +236,14 @@ class FF(nn.Module):
     def __init__(self, model, n_cls=10):
         super(FF, self).__init__()
         self.f = model
-        self.mlp_cls_head = nn.Sequential(
-            nn.LeakyReLU(0.2),
-            nn.Linear(self.f.last_dim, 256),
-            nn.LeakyReLU(0.2),
-            nn.Linear(256, 64),
-            nn.LeakyReLU(0.2),
-        )
-        self.cls_head = nn.Linear(64, n_cls)
-        self.energy_output = nn.Linear(64, 1)
         # self.energy_output = nn.Linear(self.f.last_dim, 1)
         self.n_cls = n_cls
         # self.is_feat = is_feat
 
-    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False, return_feat=False):
+    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False, return_feat=False, z=None):
         if cls_mode:
             if is_feat:
-                feats, penult_z = self.f(x, is_feat=is_feat, preact=preact)
+                feats, penult_z = self.f(x, is_feat=is_feat, preact=preact, z=z)
                 # print(penult_z.requires_grad)
                 # print(self.f(x, is_feat=is_feat, preact=preact))
                 return feats, penult_z
@@ -276,25 +267,12 @@ class FF(nn.Module):
 class CCF(FF):
     def __init__(self, model, n_cls=10):
         super(CCF, self).__init__(model=model, n_cls=n_cls)
-        self.logvar_fc = nn.Linear(self.f.last_dim, 1)
-        self.mu_fc = nn.Linear(self.f.last_dim, 100)
         # self.is_feat = is_feat
 
-    def kl_div(self, z, mu, std):
-        p = torch.distributions.Normal(torch.zero_like(mu), torch.ones_like(std))
-        q = torch.distributions.Normal(mu, std)
-
-        log_qzx = q.log_prob(z)
-        log_pz = p.log_prob(z)
-
-        kl = log_qzx - log_pz
-        kl = kl.sum(-1)
-        return kl
-
-    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False, return_kl=False, py=None):
+    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False, py=None, z=None):
         #print(cls_mode, is_feat, preact, y)
         
-        feats, logits = super().forward(x, y=None, cls_mode=True, is_feat=True, preact=preact)
+        feats, logits = super().forward(x, y=None, cls_mode=True, is_feat=True, preact=preact, z=z)
         
         # feat = feats[-1]
         if py is not None:
@@ -307,31 +285,15 @@ class CCF(FF):
                 return feats, logits
         return_list = []
         if y is not None:
-            pxy = torch.gather(logits, 1, y[:, None])
+            ne = torch.gather(logits, 1, y[:, None])
         else:
-            px = torch.log(logits.exp().sum(1))
+            ne = torch.log(logits.exp().sum(1))
         if is_feat:
-            if y is None:
-                return_list = [feats, px]
-            else:
-                return_list = [feats, pxy]
+            return_list = [feats, ne]
         else:
             # logits = super().forward(x=x, y=y, cls_mode=False)
             # print(logits.requires_grad)
-            if y is None:
-                return_list =[px]
-            else:
-                return_list =[pxy]
-
-        if return_kl:
-            log_var = self.logvar_fc(F.relu(feats[-1]))
-            mu = self.mu_fc(F.relu(feats[-1]))
-            # std = torch.exp(log_var / 2)
-            # q = torch.distributions.Normal(mu, std)
-            # z = q.rsample()
-            # kl_loss = self.kl_div(z, mu, std)
-            return_list.append((mu, log_var))
-            # return_list.append(log_var)
+            return_list = [ne]
         return return_list
 
 

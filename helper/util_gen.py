@@ -16,6 +16,118 @@ import cv2
 def init_random(s1, s2, s3, s4):
     return torch.FloatTensor(s1, s2, s3, s4).uniform_(-1, 1)
 
+def diag_normal_NLL(z, mu, log_var):
+    '''
+    Directly calculate the log probability without distribution sampling. It can modeling the sample process q_{\phi}(z | x)
+    Input: [b, nz]
+    '''
+    nll = 0.5 * log_var + 0.5 * ((z - mu) * (z - mu) / (1e-6 + log_var.exp()))
+    return nll.squeeze()
+
+def diag_standard_normal_NLL(z):
+    '''
+    Sample from q_{\alpha}(z) ~ N(0, I)
+    '''
+    nll = 0.5 * (z * z)
+    return nll.squeeze()
+
+def estimate_h(x_lab, y_lab, model_vae, model, mode='ebm', batch_size=128):
+    results = model_vae(x_lab, labels=y_lab)
+    x_rec, mu, log_var, z = results[0], results[2], results[3], results[4]
+    if mode == 'ebm':
+        mu = mu.detach()
+        log_var = log_var.detach()
+        z = z.detach()
+    # print(mu, log_var)
+    
+    dist = torch.distributions.Normal(mu, (log_var / 2).exp())
+    dist_neg = torch.distributions.Normal(torch.zeros_like(z), torch.ones_like(z))
+    logqz = dist.log_prob(z).mean(1)
+    # logpzgivenx = diag_normal_NLL(z, mu, log_var)
+    # logqz = -diag_normal_NLL(z, mu, log_var)
+    # logqz = dist_neg.log_prob(z).mean(1)
+    # print((z * z).sum(1).mean())
+    # print(logqz)
+    logqxgivenz = -torch.mean((x_rec - x_lab) ** 2, (1,2,3))
+    log_probs_noise_pos = logqz + logqxgivenz
+    
+    # print(z, mu)
+    x_neg, z_neg, logqxgivenz_neg = model_vae.sample(num_samples=batch_size, current_device=0, labels=y_lab, train=True)
+    if mode == 'ebm':
+        z_neg = z_neg.detach()
+        x_neg = x_neg.detach()
+    logqz_neg = dist_neg.log_prob(z_neg).mean(1)
+    # print(x_neg.requires_grad, x_neg_rec.requires_grad, mode)
+    
+    # logqz
+    log_probs_noise_neg = logqz_neg + logqxgivenz_neg
+
+    # print(mu_neg.shape, log_var_neg.shape, mu.shape, log_var.shape)
+    # print(log_var.mean().item(), log_var_neg.mean().item())
+    
+    # dist_neg = torch.distributions.Normal(mu_neg, (log_var_neg/2).exp() / 2)
+    # log_probs_noise_neg = dist.log_prob(z_neg).mean(1)
+    # print(model.c)
+    log_probs_ebm_pos = model(x=x_lab, y=y_lab, z=z)[0]
+    log_probs_ebm_neg = model(x=x_neg, y=y_lab, z=z_neg)[0]
+    
+    logit_ebm = torch.cat([log_probs_ebm_pos, log_probs_ebm_neg], 1)
+    if mode == 'vae':
+        logit_ebm = logit_ebm.detach()
+    logit_noise = torch.cat([log_probs_noise_pos.unsqueeze(1), log_probs_noise_neg.unsqueeze(1)], 1)
+    logit_true = logit_ebm - logit_noise
+    label = torch.zeros_like(logit_ebm)
+    label[:, 0] = 1
+    loss_theta = torch.nn.BCEWithLogitsLoss(reduction='none')(logit_true, label).sum(1)
+    # print(loss_theta)
+    
+    # print(log_probs_ebm_neg.shape, log_probs_ebm_pos.shape, log_probs_noise_neg.unsqueeze(1).shape, log_probs_noise_pos.shape)
+
+    # ll_pos = log_probs_ebm_pos - torch.cat([log_probs_ebm_pos, log_probs_noise_pos.unsqueeze(1)], 1).logsumexp(1, keepdim=True)
+    # ll_neg = log_probs_noise_neg - torch.cat([log_probs_ebm_neg, log_probs_noise_neg.unsqueeze(1)], 1).logsumexp(1, keepdim=True)
+
+    # print(v)
+    
+    # if mode == 'vae':
+    #     log_probs_ebm_pos = log_probs_ebm_pos.detach()
+    #     log_probs_ebm_neg = log_probs_ebm_neg.detach()
+    # print(log_probs_ebm_neg, log_probs_noise_neg )
+    # k = log(40) = 3.689
+    h_pos = torch.sigmoid(log_probs_ebm_pos.squeeze() - log_probs_noise_pos)
+    h_neg = torch.sigmoid(log_probs_ebm_neg.squeeze() - log_probs_noise_neg)
+    # print((h_pos > 0.5).shape)
+    # print(( log_probs_noise_pos).mean().item(), (log_probs_noise_neg).mean().item())
+    acc = ((h_pos > 0.5).sum() + (h_neg < 0.5).sum()) / (len(x_lab) + len(x_neg))
+    if acc >= 0.5:
+        next_mode = 'vae'
+    else:
+        next_mode = 'ebm'
+
+    # h_pos = log_probs_ebm_pos.exp() / (log_probs_ebm_pos.exp() + log_probs_noise_pos.exp())
+    # h_neg = log_probs_ebm_neg.exp() / (log_probs_ebm_neg.exp() + log_probs_noise_neg.exp())
+    # logistic_acc = ((h_pos + (1 - h_neg)) / 2).mean()
+    # print(h_pos.mean().item(), h_neg.mean().item(), logistic_acc.item(), mode)
+    # EBM: maximize acc
+    # VAE: minimize acc
+    # if logistic_acc >= 0.5:
+    #     next_mode = 'vae'
+    # else:
+    #     next_mode = 'ebm'
+    # else:
+    #     print(x_neg.mean().item(), x_lab.mean().item(), mu_neg.mean().item(), mu.mean().item())
+    #     print(log_var.mean().item(), log_var_neg.mean().item())
+    print(log_probs_ebm_pos.mean().item(), log_probs_ebm_neg.mean().item(), log_probs_noise_pos.mean().item(), log_probs_noise_neg.mean().item(), acc.item())
+    # print(log_probs_noise_pos.mean().item(), log_probs_noise_neg.mean().item())
+    #     raise ValueError('Equal distribution of x+ and x-.')
+    
+    
+    # print(h_ebm, h_nois
+    
+    # print(loss_theta.mean(), acc.item(), mode)
+    
+    # print(v, mode, acc.item())
+    return -loss_theta.mean(), log_probs_ebm_pos, log_probs_ebm_neg, results, next_mode
+
 def get_replay_buffer(opt, model=None):
     bs = opt.capcitiy
     nc = 3
@@ -271,8 +383,8 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         # The process of get x_q~p_{\theta}(x), stochastic process of x*=argmin_{x}(E_{\theta}(x))
         # print(replay_buffer.shape, y_q.shape)
         x_q = sample_q(model, replay_buffer, y=y_q,open_clip_grad=0.1)
-        f_p, (mup, logp) = model(x_p, return_kl=True)
-        f_q, (muq, logq) = model(x_q, return_kl=True)
+        f_p = model(x_p, return_kl=True)[0]
+        f_q = model(x_q, return_kl=True)[0]
         # stdp = torch.exp(logp / 2)
         # stdq = torch.exp(logq / 2)
         # print(stdp, stdq)
@@ -291,9 +403,8 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     if opt.lmda_p_x_y > 0:
         x_q_lab = sample_q(model, replay_buffer, y=y_lab, open_clip_grad=0.1)
         # -E_{\theta}, bigger better.
-        fp, (mup, logp) = model(x_lab, y_lab, return_kl=True)
-        fq, (muq, logq) = model(x_q_lab, y_lab, return_kl=True)
-        norms = torch.norm(fp, -1) + torch.norm(fq, -1)
+        fp = model(x_lab, y_lab, py=opt.y)[0]
+        fq = model(x_q_lab, y_lab, py=opt.y)[0]
         # stdp = torch.exp(logp / 10)
         # stdq = torch.exp(logq / 10)
         # print(logp, logq)

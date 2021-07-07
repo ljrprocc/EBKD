@@ -10,7 +10,9 @@ https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py
 '''
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.utils import spectral_norm
 import math
+import torch
 
 
 __all__ = ['resnet']
@@ -32,7 +34,7 @@ def get_norm(norm='none'):
         norm_layer = nn.BatchNorm2d
     elif norm  == 'instance':
         norm_layer = nn.InstanceNorm2d
-    elif norm == 'none':
+    elif norm == 'none' or norm == 'spectral':
         norm_layer = Identity
     else:
         raise NotImplementedError('Son of a total bitch.')
@@ -64,6 +66,9 @@ class BasicBlock(nn.Module):
         self.bn2 = norm_layer(planes)
         self.downsample = downsample
         self.stride = stride
+        if norm == 'spectral_norm':
+            self.conv1 = spectral_norm(self.conv1)
+            self.conv2 = spectral_norm(self.conv2)
 
     def forward(self, x):
         residual = x
@@ -132,7 +137,7 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, depth, num_filters, block_name='BasicBlock', num_classes=10, norm='none', act='relu'):
+    def __init__(self, depth, num_filters, block_name='BasicBlock', num_classes=10, norm='none', act='relu', in_channels=3, use_latent=False, latent_dim=128, img_size=32):
         super(ResNet, self).__init__()
         norm_layer = get_norm(norm)
         act_layer = get_act(act)
@@ -147,10 +152,16 @@ class ResNet(nn.Module):
             block = Bottleneck
         else:
             raise ValueError('block_name shoule be Basicblock or Bottleneck')
+        self.use_latent = use_latent
+        self.img_size = img_size
+        if use_latent:
+            self.latent_use = nn.Linear(latent_dim, img_size*img_size)
+            in_channels += 1
 
         self.inplanes = num_filters[0]
-        self.conv1 = nn.Conv2d(3, num_filters[0], kernel_size=3, padding=1,
-                               bias=False)
+        self.conv1 = nn.Conv2d(in_channels, num_filters[0], kernel_size=3, padding=1, bias=False)
+        if norm == 'spectral':
+            self.conv1 = spectral_norm(self.conv1)
         self.bn1 = norm_layer(num_filters[0])
         self.relu = act_layer
         # print(block)
@@ -172,10 +183,12 @@ class ResNet(nn.Module):
         norm_layer = get_norm(norm)
         # print(block.expansion)
         downsample = None
+        conv_layer = nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False)
+        if norm == 'spectral':
+            conv_layer = spectral_norm(conv_layer)
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion,
-                          kernel_size=1, stride=stride, bias=False),
+                conv_layer,
                 norm_layer(planes * block.expansion),
             )
 
@@ -211,7 +224,12 @@ class ResNet(nn.Module):
 
         return [bn1, bn2, bn3]
 
-    def forward(self, x, is_feat=False, preact=False):
+    def forward(self, x, is_feat=False, preact=False, z=None):
+        if self.use_latent:
+            if z is None:
+                raise ValueError('Must refer z when use latent code.')
+            embed_z = self.latent_use(z).view(x.size(0), 1, self.img_size, self.img_size)
+            x = torch.cat([x, embed_z], 1)
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)  # 32x32

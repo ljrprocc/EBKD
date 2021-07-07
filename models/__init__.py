@@ -9,6 +9,7 @@ from .mobilenetv2 import mobile_half
 from .ShuffleNetv1 import ShuffleV1
 from .ShuffleNetv2 import ShuffleV2
 from .generator import Generator, Energy, CCG, CCF, FF
+from .cvae import ConditionalVAE, VanillaVAE
 
 model_dict = {
     'resnet8': resnet8,
@@ -41,4 +42,6 @@ model_dict = {
     'ShuffleV2': ShuffleV2,
     'G': Generator,
     'Score': CCF,
+    'vae': VanillaVAE,
+    'cvae': ConditionalVAE,
 }
