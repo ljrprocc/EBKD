@@ -6,35 +6,158 @@ from typing import *
 from torch import Tensor
 import math
 
-class BaseVAE(nn.Module):
-    
-    def __init__(self) -> None:
-        super(BaseVAE, self).__init__()
+class CVAEEncoder(nn.Module):
+    def __init__(self, in_channels, num_classes, latent_dim, hidden_dims=None, img_size=64, **kwargs):
+        super(CVAEEncoder, self).__init__()
+        self.latent_dim = latent_dim
+        self.img_size = img_size
+        self.embed = nn.Embedding(num_classes, num_classes)
+
+        self.embed_class = nn.Linear(num_classes, img_size * img_size)
+        self.embed_data = nn.Conv2d(in_channels, in_channels, kernel_size=1)
+
+        modules = []
+        down_hiddens = int(math.log2(img_size))
+        self.hidden_dims = [32, 64, 128, 512]
+
+        in_channels += 1 # To account for the extra label channel
+        # Build Encoder
+        for h_dim in self.hidden_dims:
+            modules.append(
+                nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels=h_dim,
+                              kernel_size= 3, stride= 2, padding  = 1),
+                    nn.BatchNorm2d(h_dim),
+                    nn.LeakyReLU(),
+                    nn.Conv2d(h_dim, h_dim, 3, 1, 1),
+                    nn.BatchNorm2d(h_dim),
+                    nn.LeakyReLU())
+            )
+            in_channels = h_dim
+
+        self.encoder = nn.Sequential(*modules)
+        self.fc_mu = nn.Linear(self.hidden_dims[-1]*4, latent_dim)
+        self.fc_var = nn.Linear(self.hidden_dims[-1]*4, latent_dim)
 
     def encode(self, input: Tensor) -> List[Tensor]:
-        raise NotImplementedError
+        """
+        Encodes the input by passing through the encoder network
+        and returns the latent codes.
+        :param input: (Tensor) Input tensor to encoder [N x C x H x W]
+        :return: (Tensor) List of latent codes
+        """
+        result = self.encoder(input)
+        result = torch.flatten(result, start_dim=1)
+        # Split the result into mu and var components
+        # of the latent Gaussian distribution
 
-    def decode(self, input: Tensor) -> Any:
-        raise NotImplementedError
+        mu = self.fc_mu(result)
+        log_var = self.fc_var(result)
 
-    def sample(self, batch_size:int, current_device: int, **kwargs) -> Tensor:
-        raise RuntimeWarning()
+        return [mu, log_var]
 
-    def generate(self, x: Tensor, **kwargs) -> Tensor:
-        raise NotImplementedError
+    def reparameterize(self, mu, log_var):
+        '''
+        z = mu_{\phi}(x) + \sigma_{\phi}(x)
+        '''
+        std = (log_var / 2).exp()
+        z = mu + torch.randn_like(mu) * std
+        return z
+    
+    def forward(self, x, **kwargs):
+        y = kwargs['labels']
+        y = self.embed(y)
+        embedded_class = self.embed_class(y)
+        embedded_class = embedded_class.view(-1, self.img_size, self.img_size).unsqueeze(1)
+        embedded_input = self.embed_data(x)
 
-    @abstractmethod
-    def forward(self, *inputs: Tensor) -> Tensor:
-        pass
+        x = torch.cat([embedded_input, embedded_class], dim = 1)
+        mu, log_var = self.encode(x)
 
-    @abstractmethod
-    def loss_function(self, *inputs: Any, **kwargs) -> Tensor:
-        pass
+        z = self.reparameterize(mu, log_var)
+        return [z, mu, log_var, y]
+
+class CVAEDecoder(nn.Module):
+    def __init__(self, num_classes=100, in_channels=3, hidden_dims=None, img_size=32, latent_dim=100, **kwargs):
+        super(CVAEDecoder, self).__init__()
+
+        self.embed = nn.Embedding(num_classes, num_classes)
+        self.latent_dim = latent_dim
+        self.img_size = img_size
+
+        if hidden_dims is None:
+            self.hidden_dims = [512, 128, 64, 32]
+        else:
+            self.hidden_dims = hidden_dims
+
+        self.decoder_input = nn.Linear(latent_dim + num_classes, self.hidden_dims[0] * 4)
+        modules = []
+        for i in range(len(self.hidden_dims) - 1):
+            modules.append(
+                nn.Sequential(
+                    nn.ConvTranspose2d(self.hidden_dims[i],
+                                       self.hidden_dims[i + 1],
+                                       kernel_size=3,
+                                       stride = 2,
+                                       padding=1,
+                                       output_padding=1),
+                    nn.BatchNorm2d(self.hidden_dims[i + 1]),
+                    nn.LeakyReLU(),
+                    nn.Conv2d(self.hidden_dims[i+1], self.hidden_dims[i+1], 3, 1, 1),
+                    nn.BatchNorm2d(self.hidden_dims[i+1]),
+                    nn.LeakyReLU())
+            )
 
 
 
-class ConditionalVAE(BaseVAE):
+        self.decoder = nn.Sequential(*modules)
 
+        self.final_layer = nn.Sequential(
+                            nn.ConvTranspose2d(self.hidden_dims[-1],
+                                               self.hidden_dims[-1],
+                                               kernel_size=3,
+                                               stride=2,
+                                               padding=1,
+                                               output_padding=1),
+                            nn.BatchNorm2d(self.hidden_dims[-1]),
+                            nn.LeakyReLU(),
+                            nn.Conv2d(self.hidden_dims[-1], out_channels= 3,
+                                      kernel_size= 3, padding= 1))
+        
+
+    def decode(self, z):
+        result = self.decoder_input(z)
+        
+        result = result.view(-1, self.hidden_dims[0], 2, 2)
+        # print(result.shape)
+        int_result = self.decoder(result)
+        result = self.final_layer(int_result)
+        # logvar = self.final_var(int_result)
+        return result
+
+    def forward(self, z, **kwargs):
+        y = kwargs['y']
+        y = self.embed(y)
+        z = torch.cat([z, y], dim = 1)
+        # print(z.shape)
+        x_rec = self.decode(z)
+        return torch.tanh(x_rec)
+
+    def sample(self, num_samples, current_device, **kwargs):
+        y = kwargs['y']
+        y = self.embed(y)
+        z = torch.randn(num_samples,
+                        self.latent_dim)
+
+        z = z.to(current_device)
+        oriz = z
+        # print(z.shape, y.shape)
+        z = torch.cat([z, y], dim=1)
+        samples = self.decode(z)
+        return torch.tanh(samples), oriz
+
+
+class ConditionalVAE(nn.Module):
     def __init__(self,
                  in_channels: int,
                  num_classes: int,
@@ -54,15 +177,16 @@ class ConditionalVAE(BaseVAE):
         modules = []
         down_hiddens = int(math.log2(img_size))
 
-        if hidden_dims is None:
-            self.hidden_dims = []
-            begin_hidden = 32
-            for i in range(down_hiddens - 1):
-                self.hidden_dims.append(begin_hidden)
-                begin_hidden *= 2
-            # hidden_dims = [32, 64, 128, 256, 512]
-        else:
-            self.hidden_dims = hidden_dims
+        # if hidden_dims is None:
+        #     self.hidden_dims = []
+        #     begin_hidden = 32
+        #     for i in range(down_hiddens - 1):
+        #         self.hidden_dims.append(begin_hidden)
+        #         begin_hidden *= 2
+        #     # hidden_dims = [32, 64, 128, 256, 512]
+        # else:
+        #     self.hidden_dims = hidden_dims
+        self.hidden_dims = [32, 64, 128, 512]
 
         in_channels += 1 # To account for the extra label channel
         # Build Encoder
@@ -71,6 +195,9 @@ class ConditionalVAE(BaseVAE):
                 nn.Sequential(
                     nn.Conv2d(in_channels, out_channels=h_dim,
                               kernel_size= 3, stride= 2, padding  = 1),
+                    nn.BatchNorm2d(h_dim),
+                    nn.LeakyReLU(),
+                    nn.Conv2d(h_dim, h_dim, 3, 1, 1),
                     nn.BatchNorm2d(h_dim),
                     nn.LeakyReLU())
             )
@@ -144,6 +271,7 @@ class ConditionalVAE(BaseVAE):
 
         # Split the result into mu and var components
         # of the latent Gaussian distribution
+        # print(result.shape)
         mu = self.fc_mu(result)
         log_var = self.fc_var(result)
 
@@ -179,7 +307,7 @@ class ConditionalVAE(BaseVAE):
         x = torch.cat([embedded_input, embedded_class], dim = 1)
         mu, log_var = self.encode(x)
 
-        z = self.reparameterize(mu, (log_var / 2).exp())
+        z = self.reparameterize(mu, log_var)
         oriz = z
         z = torch.cat([z, y], dim = 1)
         x_rec, _ = self.decode(z)
@@ -232,7 +360,7 @@ class ConditionalVAE(BaseVAE):
             dist = torch.distributions.Normal(mu, 0.01 * torch.ones_like(mu))
             # print( log_var.mean())
             log_probs = torch.mean(dist.log_prob(samples), (1,2,3))
-            return [torch.tanh(samples), oriz, log_probs]
+            return [torch.tanh(mu), oriz, log_probs]
         else:
             return torch.tanh(samples)
 
@@ -246,9 +374,7 @@ class ConditionalVAE(BaseVAE):
         return torch.tanh(self.forward(x, **kwargs)[0])
 
 
-class VanillaVAE(BaseVAE):
-
-
+class VanillaVAE(nn.Module):
     def __init__(self,
                  in_channels: int,
                  latent_dim: int,

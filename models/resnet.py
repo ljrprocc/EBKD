@@ -224,12 +224,15 @@ class ResNet(nn.Module):
 
         return [bn1, bn2, bn3]
 
-    def forward(self, x, is_feat=False, preact=False, z=None):
+    def forward(self, x=None, is_feat=False, preact=False, z=None):
         if self.use_latent:
             if z is None:
                 raise ValueError('Must refer z when use latent code.')
-            embed_z = self.latent_use(z).view(x.size(0), 1, self.img_size, self.img_size)
-            x = torch.cat([x, embed_z], 1)
+            embed_z = self.latent_use(z).view(z.size(0), 1, self.img_size, self.img_size)
+            if x is None:
+                x = embed_z
+            else:
+                x = torch.cat([x, embed_z], 1)
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)  # 32x32

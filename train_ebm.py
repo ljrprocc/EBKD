@@ -22,7 +22,7 @@ from datasets.imagenet import get_imagenet_dataloader, get_dataloader_sample
 from helper.util import adjust_learning_rate, TVLoss
 from helper.util_gen import get_replay_buffer, getDirichl
 
-from helper.loops import train_generator
+from helper.loops import train_generator, train_joint
 from helper.pretrain import init
 # from helper.util import SampleBuffer
 
@@ -41,10 +41,10 @@ def parse_option():
     parser.add_argument('--data_noise', type=float, default=0.03, help="The adding noise for sampling data point x~p_data.")
 
     # optimization
-    parser.add_argument('--learning_rate', type=float, default=0.01, help='learning rate')
-    parser.add_argument('--lr_decay_epochs', type=str, default='150,180,210,250', help='where to decay lr, can be a list')
-    parser.add_argument('--lr_decay_rate', type=float, default=0.3, help='decay rate for learning rate')
-    parser.add_argument('--weight_decay', type=float, default=0.0, help='weight decay')
+    parser.add_argument('--learning_rate_ebm', type=float, default=0.01, help='learning rate')
+    parser.add_argument('--lr_decay_epochs_ebm', type=str, default='150,180,210,250', help='where to decay lr, can be a list')
+    parser.add_argument('--lr_decay_rate_ebm', type=float, default=0.3, help='decay rate for learning rate')
+    parser.add_argument('--weight_decay_ebm', type=float, default=0.0, help='weight decay')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 
     # Generator Details
@@ -62,8 +62,11 @@ def parse_option():
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet20x10' ])
     parser.add_argument('--model_s', type=str, default='resnet8x4',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10'])
+    parser.add_argument('--model_stu', type=str, default='resnet8x4',
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10'])
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
     parser.add_argument('--act', type=str, default='relu', choices=['relu', 'leaky', 'swish'])
+    parser.add_argument('--joint', action="store_true", help='Flag for whether adding l_c term when training EBM.')
     
     
     parser.add_argument('--path_t', type=str, default=None, help='teacher model snapshot')
@@ -74,7 +77,7 @@ def parse_option():
     parser.add_argument('--lmda_tv', default=2.5e-3, type=float, help='Hyperparameter for total variation loss.')
     parser.add_argument('--lmda_p_x', default=1., type=float, help='Hyperparameter for building p(x)')
     parser.add_argument('--lmda_p_x_y', default=0., type=float, help='Hyperparameter for building p(x,y)')
-    parser.add_argument('--lmda_kl', default=0.3, type=float, help='Hyperparameter for kl divergence.')
+    parser.add_argument('--lmda_e', default=1., type=float, help='Hyperparameter for kl divergence of negative student and positive teacher.')
     parser.add_argument('--steps', default=20, type=int, help='Total MCMC steps for generating images.')
     parser.add_argument('--step_size', default=1, type=float, help='learning rate of MCMC updation.')
     parser.add_argument('--capcitiy', default=10000, type=int, help='Capcity of sample buffer.')
@@ -105,14 +108,16 @@ def parse_option():
         opt.model_path = './save/student_model'
         opt.tb_path = './save/student_tensorboards'
 
-    iterations = opt.lr_decay_epochs.split(',')
-    opt.lr_decay_epochs = list([])
+    iterations = opt.lr_decay_epochs_ebm.split(',')
+    opt.lr_decay_epochs_ebm = list([])
     for it in iterations:
-        opt.lr_decay_epochs.append(int(it))
+        opt.lr_decay_epochs_ebm.append(int(it))
 
     # opt.model_t = get_teacher_name(opt.path_t)
-
-    opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_cls_mode_{}'.format(opt.model_s, opt.dataset, opt.learning_rate, opt.weight_decay, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.cls)
+    if opt.joint:
+        opt.model_name = '{}_T:{}_S:{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_cls_mode_{}'.format(opt.model_s, opt.model, opt.model_stu, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.cls)
+    else:
+        opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_cls_mode_{}'.format(opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.cls)
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
     if not os.path.isdir(opt.tb_folder):
@@ -171,17 +176,26 @@ def main():
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
     model = load_teacher(opt.path_t, opt)
     model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm)
-    model_score = model_dict['Score'](model=model_score, n_cls=opt.n_cls)
+    model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
+    if opt.joint:
+        print('=====> Loading student model...')
+        model_stu = model_dict[opt.model_stu](num_classes=opt.n_cls, norm='batch')
+        print('=====> Done.')
     # model = model_dict['Score'](model=model, n_cls=opt.n_cls)
     # print(model)
-    optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate, betas=[0.9, 0.999],  weight_decay=opt.weight_decay)
-    model_list = [model, model_score]
+    optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate_ebm, betas=[0.9, 0.999],  weight_decay=opt.weight_decay_ebm)
+    if opt.joint:
+        model_list = [model, model_stu, model_score]
+    else:
+        model_list = [model, model_score]
     # optimizer = nn.DataParallel(optimizer)
     criterion = TVLoss()
     if torch.cuda.is_available():
         model = model.cuda()
         model_score = model_score.cuda()
         criterion = criterion.cuda()
+        if opt.joint:
+            model_stu = model_stu.cuda()
         cudnns.benchmark = True
 
 
@@ -193,16 +207,19 @@ def main():
     print(opt.y)
     # routine
     for epoch in range(opt.init_epochs+1, opt.epochs + 1):
-        if epoch in opt.lr_decay_epochs:
+        if epoch in opt.lr_decay_epochs_ebm:
             for param_group in optimizer.param_groups:
-                new_lr = param_group['lr'] * opt.lr_decay_rate
+                new_lr = param_group['lr'] * opt.lr_decay_rate_ebm
                 param_group['lr'] = new_lr
 
         adjust_learning_rate(epoch, opt, optimizer)
         print("==> training...")
 
         time1 = time.time()
-        train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
+        if opt.joint:
+            train_loss = train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
+        else:
+            train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
         time2 = time.time()
         logger.log_value('train_loss', train_loss, epoch)
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))

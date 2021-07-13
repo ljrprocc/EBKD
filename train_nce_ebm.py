@@ -48,9 +48,12 @@ def parse_option():
     parser.add_argument('--weight_decay_ebm', type=float, default=0.0, help='weight decay')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
     # VAE option
-    parser.add_argument('--learning_rate_vae', type=float, default=0.005, help='learning rate for vae model')
-    parser.add_argument('--weight_decay_vae', type=float, default=0.0, help='weight decay for ebm')
+    parser.add_argument('--learning_rate_e', type=float, default=0.005, help='learning rate for vae model')
+    parser.add_argument('--weight_decay_e', type=float, default=0.0, help='weight decay for encoder')
+    parser.add_argument('--learning_rate_d', type=float, default=0.005, help='learning rate for vae model')
+    parser.add_argument('--weight_decay_d', type=float, default=0.0, help='weight decay for decoder')
     parser.add_argument('--scheduler_gamma', type=float, default=0.95, help= 'gamma for lr_scheduler.')
+    parser.add_argument('--reinit_freq', type=str, default=0.05, help='reinitialization frequency.')
 
     # Generator Details
     parser.add_argument('--g_steps', type=int, default=100, help='Updating steps for x')
@@ -69,20 +72,24 @@ def parse_option():
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10'])
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance', 'spectral'])
     parser.add_argument('--act', type=str, default='relu', choices=['relu', 'leaky', 'swish'])
+    parser.add_argument('--capcitiy', default=10000, type=int, help='Capcity of sample buffer.')
     
     
     parser.add_argument('--path_t', type=str, default=None, help='teacher model snapshot')
 
     parser.add_argument('--energy', default='mcmc', type=str, help='Sampling method to update EBM.')
     parser.add_argument('--lmda_v', default=0.01, type=float, help='Hyperparameter for update VAE.')
+    parser.add_argument('--lmda_tv', default=0.25, type=float, help='None')
     parser.add_argument('--steps', default=20, type=int, help='Total MCMC steps for generating images.')
     parser.add_argument('--step_size', default=1, type=float, help='learning rate of MCMC updation.')
     parser.add_argument('--trial', type=str, default='1', help='trial id')
     parser.add_argument('--plot_uncond', action="store_true", help="Flag for saving class-conditional samples.")
     parser.add_argument('--plot_cond', action="store_true", help="Flag for saving class-conditional samples")
+    parser.add_argument('--load_buffer_path', type=str, default=None, help='If not none, the loading path of replay buffer.')
     parser.add_argument('--n_valid', type=int, default=5000, help='Set validation data.')
     parser.add_argument('--labels_per_class', type=int, default=-1, help='Number of labeled examples per class.')
     parser.add_argument('--cls', type=str, default='cls', choices=['cls', 'mi'])
+    parser.add_argument('--latent_dim', type=int, default=100, help='The dimension of latent vector.')
 
 
     # DDP options
@@ -109,7 +116,7 @@ def parse_option():
 
     # opt.model_t = get_teacher_name(opt.path_t)
 
-    opt.model_name = '{}_{}_lr_{}_decay_{}_lrvae_{}_gamma_{}_energy_mode_{}_trial_{}'.format(opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.learning_rate_vae, opt.scheduler_gamma, opt.energy, opt.trial)
+    opt.model_name = '{}_{}_lr_{}_decay_{}_lre_{}_gamma_{}_lrd_{}_energy_mode_{}_trial_{}'.format(opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.learning_rate_e, opt.scheduler_gamma, opt.learning_rate_d, opt.energy, opt.trial)
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
     if not os.path.isdir(opt.tb_folder):
@@ -170,22 +177,31 @@ def main():
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
     # model = load_teacher(opt.path_t, opt)
 
-    model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm, use_latent=True, img_size=img_size, latent_dim=100)
-    model_score = model_dict['Score'](model=model_score, n_cls=opt.n_cls)
-    model_vae = model_dict[opt.model_vae](num_classes=opt.n_cls, in_channels=3, latent_dim=100, img_size=img_size)
+    # model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm, use_latent=True, img_size=img_size, latent_dim=100, in_channels=0)
+    # model_score = model_dict['Score'](model=model_score, n_cls=opt.n_cls)
+    model_score = model_dict['Score'](nc=3, nz=opt.latent_dim, nez=opt.n_cls)
+    # model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
+    # model_vae = model_dict[opt.model_vae](num_classes=opt.n_cls, in_channels=3, latent_dim=100, img_size=img_size)
+    encoder = model_dict['enc'](in_channels=3, num_classes=opt.n_cls, latent_dim=opt.latent_dim, img_size=img_size)
+    decoder = model_dict['dec'](in_channels=3, num_classes=opt.n_cls, latent_dim=opt.latent_dim, img_size=img_size)
     # model = model_dict['Score'](model=model, n_cls=opt.n_cls)
     # print(model)
     optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate_ebm, betas=[0.9, 0.999],  weight_decay=opt.weight_decay_ebm)
-    optimizer_vae = optim.Adam(model_vae.parameters(), lr=opt.learning_rate_vae, weight_decay=opt.weight_decay_vae)
-    scheduler_vae = optim.lr_scheduler.ExponentialLR(optimizer_vae, gamma=opt.scheduler_gamma)
-    model_list = [model_vae, model_score]
-    optimizer_list = [optimizer_vae, optimizer]
+    optimizer_e = optim.Adam(encoder.parameters(), lr=opt.learning_rate_e, weight_decay=opt.weight_decay_e)
+    optimizer_d = optim.Adam(decoder.parameters(), lr=opt.learning_rate_d, weight_decay=opt.weight_decay_d)
+    scheduler_e = optim.lr_scheduler.ExponentialLR(optimizer_e, gamma=opt.scheduler_gamma)
+    scheduler_d = optim.lr_scheduler.ExponentialLR(optimizer_d, gamma=opt.scheduler_gamma)
+    model_list = [encoder, decoder, model_score]
+    optimizer_list = [optimizer_e, optimizer_d, optimizer]
+    fixed_noise = torch.FloatTensor(opt.n_cls, opt.latent_dim, 1, 1)
     # optimizer = nn.DataParallel(optimizer)
     # criterion = TVLoss()
     if torch.cuda.is_available():
-        model_vae = model_vae.cuda()
+        encoder = encoder.cuda()
+        decoder = decoder.cuda()
         model_score = model_score.cuda()
         # criterion = criterion.cuda()
+        fixed_noise = fixed_noise.cuda()
         cudnns.benchmark = False
         cudnns.deterministic = True
 
@@ -193,7 +209,7 @@ def main():
     # tensorboard
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
-    # buffer, _ = get_replay_buffer(opt, model=model_score)
+    buffer, _ = get_replay_buffer(opt, model=model_score)
     # opt.y = getDirichl(opt.path_t)
     # print(opt.y)
     # routine
@@ -207,10 +223,11 @@ def main():
         print("==> training...")
 
         time1 = time.time()
-        train_loss = train_nce_G(epoch, train_loader, model_list, optimizer_list, opt, logger)
+        train_loss = train_nce_G(epoch, train_loader, model_list, optimizer_list, opt, logger, buffer, fixed_noise=fixed_noise)
         time2 = time.time()
         logger.log_value('train_loss', train_loss, epoch)
-        scheduler_vae.step()
+        scheduler_e.step()
+        scheduler_d.step()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
         
         # save the best model
@@ -220,9 +237,12 @@ def main():
             print('Writing valid samples')
             ckpt_dict = {
                 "ebm_state_dict": model_score.state_dict(),
-                "vae_state_dict": model_vae.state_dict(),
-                "vae_opt_state_dict": optimizer_vae.state_dict(),
-                "ebm_opt_state_dict": optimizer.state_dict()
+                "e_state_dict": encoder.state_dict(),
+                "e_opt_state_dict": optimizer_e.state_dict(),
+                "ebm_opt_state_dict": optimizer.state_dict(),
+                "d_state_dict": decoder.state_dict(),
+                "d_opt_state_dict": optimizer_d.state_dict(),
+                "buffer": buffer
             }
             torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_epoch_{epoch}.pts'.format(epoch=epoch)))
 

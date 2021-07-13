@@ -13,8 +13,9 @@ from torch.distributions.dirichlet import Dirichlet
 import torchvision.utils as vutils
 import cv2
 
-def init_random(s1, s2, s3, s4):
-    return torch.FloatTensor(s1, s2, s3, s4).uniform_(-1, 1)
+def init_random(s):
+    # print(s)
+    return torch.FloatTensor(*s).uniform_(-1, 1)
 
 def diag_normal_NLL(z, mu, log_var):
     '''
@@ -43,11 +44,7 @@ def estimate_h(x_lab, y_lab, model_vae, model, mode='ebm', batch_size=128):
     dist = torch.distributions.Normal(mu, (log_var / 2).exp())
     dist_neg = torch.distributions.Normal(torch.zeros_like(z), torch.ones_like(z))
     logqz = dist.log_prob(z).mean(1)
-    # logpzgivenx = diag_normal_NLL(z, mu, log_var)
-    # logqz = -diag_normal_NLL(z, mu, log_var)
-    # logqz = dist_neg.log_prob(z).mean(1)
-    # print((z * z).sum(1).mean())
-    # print(logqz)
+
     logqxgivenz = -torch.mean((x_rec - x_lab) ** 2, (1,2,3))
     log_probs_noise_pos = logqz + logqxgivenz
     
@@ -60,7 +57,7 @@ def estimate_h(x_lab, y_lab, model_vae, model, mode='ebm', batch_size=128):
     # print(x_neg.requires_grad, x_neg_rec.requires_grad, mode)
     
     # logqz
-    log_probs_noise_neg = logqz_neg + logqxgivenz_neg
+    log_probs_noise_neg = logqz_neg
 
     # print(mu_neg.shape, log_var_neg.shape, mu.shape, log_var.shape)
     # print(log_var.mean().item(), log_var_neg.mean().item())
@@ -79,20 +76,7 @@ def estimate_h(x_lab, y_lab, model_vae, model, mode='ebm', batch_size=128):
     label = torch.zeros_like(logit_ebm)
     label[:, 0] = 1
     loss_theta = torch.nn.BCEWithLogitsLoss(reduction='none')(logit_true, label).sum(1)
-    # print(loss_theta)
     
-    # print(log_probs_ebm_neg.shape, log_probs_ebm_pos.shape, log_probs_noise_neg.unsqueeze(1).shape, log_probs_noise_pos.shape)
-
-    # ll_pos = log_probs_ebm_pos - torch.cat([log_probs_ebm_pos, log_probs_noise_pos.unsqueeze(1)], 1).logsumexp(1, keepdim=True)
-    # ll_neg = log_probs_noise_neg - torch.cat([log_probs_ebm_neg, log_probs_noise_neg.unsqueeze(1)], 1).logsumexp(1, keepdim=True)
-
-    # print(v)
-    
-    # if mode == 'vae':
-    #     log_probs_ebm_pos = log_probs_ebm_pos.detach()
-    #     log_probs_ebm_neg = log_probs_ebm_neg.detach()
-    # print(log_probs_ebm_neg, log_probs_noise_neg )
-    # k = log(40) = 3.689
     h_pos = torch.sigmoid(log_probs_ebm_pos.squeeze() - log_probs_noise_pos)
     h_neg = torch.sigmoid(log_probs_ebm_neg.squeeze() - log_probs_noise_neg)
     # print((h_pos > 0.5).shape)
@@ -103,29 +87,6 @@ def estimate_h(x_lab, y_lab, model_vae, model, mode='ebm', batch_size=128):
     else:
         next_mode = 'ebm'
 
-    # h_pos = log_probs_ebm_pos.exp() / (log_probs_ebm_pos.exp() + log_probs_noise_pos.exp())
-    # h_neg = log_probs_ebm_neg.exp() / (log_probs_ebm_neg.exp() + log_probs_noise_neg.exp())
-    # logistic_acc = ((h_pos + (1 - h_neg)) / 2).mean()
-    # print(h_pos.mean().item(), h_neg.mean().item(), logistic_acc.item(), mode)
-    # EBM: maximize acc
-    # VAE: minimize acc
-    # if logistic_acc >= 0.5:
-    #     next_mode = 'vae'
-    # else:
-    #     next_mode = 'ebm'
-    # else:
-    #     print(x_neg.mean().item(), x_lab.mean().item(), mu_neg.mean().item(), mu.mean().item())
-    #     print(log_var.mean().item(), log_var_neg.mean().item())
-    print(log_probs_ebm_pos.mean().item(), log_probs_ebm_neg.mean().item(), log_probs_noise_pos.mean().item(), log_probs_noise_neg.mean().item(), acc.item())
-    # print(log_probs_noise_pos.mean().item(), log_probs_noise_neg.mean().item())
-    #     raise ValueError('Equal distribution of x+ and x-.')
-    
-    
-    # print(h_ebm, h_nois
-    
-    # print(loss_theta.mean(), acc.item(), mode)
-    
-    # print(v, mode, acc.item())
     return -loss_theta.mean(), log_probs_ebm_pos, log_probs_ebm_neg, results, next_mode
 
 def get_replay_buffer(opt, model=None):
@@ -136,7 +97,8 @@ def get_replay_buffer(opt, model=None):
     else:
         im_size = 224
     if not opt.load_buffer_path:
-        replay_buffer = init_random(bs, nc, im_size, im_size)
+        # replay_buffer = init_random((bs, opt.latent_dim))
+        replay_buffer = init_random((bs, nc, im_size, im_size))
     else:
         print('Loading replay buffer from local..')
         ckpt_dict = torch.load(opt.load_buffer_path)
@@ -154,17 +116,7 @@ def getDirichl(net_path, scale=1, sim_scale=1):
     X = diri.rsample()
     return X.mean(0)
 
-    # for i in range(num_classes):
-    #     alpha = sim_matrix[i, :]
-    #     alpha_normalized = (alpha - torch.min(alpha)) / (torch.max(alpha) - torch.min(alpha))
-    #     alpha_normalized = alpha_normalized * scale + 0.000001
-    #     # print(alpha_normalized.device)
-    #     diri = Dirichlet(alpha_normalized)
-    #     X += diri.rsample((bs, ))
-
-    # return X / num_classes
-
-def get_sample_q(opts, device=None, open_debug=False):
+def get_sample_q(opts, device=None, open_debug=False, l=None):
     # bs = opt.capcitiy
     nc = 3
     if opts.dataset == 'cifar100':
@@ -177,15 +129,20 @@ def get_sample_q(opts, device=None, open_debug=False):
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     def sample_p_0(replay_buffer, bs, y=None):
         if len(replay_buffer) == 0:
-            return init_random(bs, nc, im_size, im_size), []
+            return init_random((bs, nc, im_size, im_size)), []
+            # return init_random((bs, l)), []
         buffer_size = len(replay_buffer) if y is None else len(replay_buffer) // opts.n_cls
+        # print(replay_buffer)
         inds = torch.randint(0, buffer_size, (bs,))
         # if cond, convert inds to class conditional inds
         if y is not None:
             inds = y.cpu() * buffer_size + inds
         buffer_samples = replay_buffer[inds]
-        random_samples = init_random(bs, nc, im_size, im_size)
+        random_samples = init_random((bs, nc, im_size, im_size))
+        # s = (bs, opts.latent_dim)
+        # random_samples = init_random(s)
         choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None, None, None]
+        # choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None]
         samples = choose_random * random_samples + (1 - choose_random) * buffer_samples
         return samples.cuda(), inds
 
@@ -347,17 +304,19 @@ def cond_samples(model, replay_buffer, opt, fresh=False):
     #     if this_im.size(0) > 0:
     #         plot('{}/samples_{}.png'.format(opt.save_dir, i), this_im)
 
-def update_lc_theta(opt, neg_out, x_q, logit, y_gt):
+def update_lc_theta(opt, neg_out, x_q, t_logit, y_gt, s_logit, t_logit_true):
     l_tv = get_image_prior_losses(x_q)
     n_cls = opt.n_cls
     y_one_hot = torch.eye(n_cls)[y_gt].to(x_q.device)
-    l_cls = -torch.sum(torch.log_softmax(logit, 1) * y_one_hot, 1)
+    l_cls = -torch.sum(torch.log_softmax(t_logit, 1) * y_one_hot, 1)
     bs = x_q.size(0)
     l_2 = torch.norm(x_q.view(bs, -1), dim=-1)
     # print(l_cls.shape, l_2.shape, l_tv.shape)
-    lc = opt.lmda_l2 * l_2 + opt.lmda_tv * l_tv + l_cls
-    l_backward = (lc * neg_out).mean() - lc.mean() * neg_out.mean()
-    return l_backward
+    # KL(p_t(y|x) || p_s(y|x))
+    l_e = torch.sum(torch.softmax(t_logit, 1) * (torch.log_softmax(s_logit, 1)- torch.log_softmax(t_logit_true, 1)), 1)
+    lc = opt.lmda_l2 * l_2 + opt.lmda_tv * l_tv + l_cls + opt.lmda_e * l_e
+    c = lc.mean()
+    return lc - c
 
 def kl_div(mu1, mu2, std1, std2):
     kl_1 = -0.5 * torch.sum(1 + std1 - mu1 ** 2 - std1.exp(), dim = 1)
@@ -371,8 +330,12 @@ def kl_div(mu1, mu2, std1, std2):
     # kl = kl.sum(-1)
     return kl_1 + kl_2
 
-def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
+def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
     L = 0
+    if mode == 'joint':
+        model_t, model_s, model = models
+    else:
+        model_t, model = models
     sample_q, sample_q_xy = get_sample_q(opt, x_p.device)
     cache_p_x = None
     cache_p_x_y = None
@@ -388,10 +351,9 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         # stdp = torch.exp(logp / 2)
         # stdq = torch.exp(logq / 2)
         # print(stdp, stdq)
-        kl = kl_div(mup, muq, logp, logq)
         fp = f_p.mean()
         fq = f_q.mean()
-        l_p_x = -(fp-fq) + opt.lmda_kl * kl.mean()
+        l_p_x = -(fp-fq)
         L += opt.lmda_p_x * l_p_x
         ls.append(l_p_x)
         cache_p_x = (fp, fq)
@@ -403,22 +365,11 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     if opt.lmda_p_x_y > 0:
         x_q_lab = sample_q(model, replay_buffer, y=y_lab, open_clip_grad=0.1)
         # -E_{\theta}, bigger better.
-        fp = model(x_lab, y_lab, py=opt.y)[0]
-        fq = model(x_q_lab, y_lab, py=opt.y)[0]
-        # stdp = torch.exp(logp / 10)
-        # stdq = torch.exp(logq / 10)
-        # print(logp, logq)
-        # unbiased estimation of variance
-        # logvarp = fp.var().log()
-        # logvarq = fq.var().log()
-        # kl = kl_div(mup, muq, logp, logq)
-        # kl = logvarp - logvarq
-        # print(kl)
-        fp = fp.mean()
-        fq = fq.mean()
+        f_p = model(x_lab, y_lab, py=opt.y)[0]
+        f_q = model(x_q_lab, y_lab, py=opt.y)[0]
+        fp = f_p.mean()
+        fq = f_q.mean()
         l_p_x_y  = -(fp-fq)
-        # l_ssm, _ = sliced_VR_score_matching(model, x_lab, y=y_lab)
-        # l_p_x_y += opt.lmda_kl * l_ssm.mean()
         cache_p_x_y = (fp, fq)
         L += opt.lmda_p_x_y * l_p_x_y
         ls.append(l_p_x_y)
@@ -439,9 +390,13 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         # l_cls.backward
     # l_cls = -torch.log_softmax(logit, 1).mean() - math.log(opt.n_cls)
     ls.append(l_cls)
-    if model_t:
-        l_c = update_lc_theta(opt, fq, x_q_lab, logit, y_lab)
-        L += l_c
+    if mode == 'joint':
+        logit_s = model_s(x_q_lab)
+        logit_t = model_t(x_q_lab)
+        logit_t_pos = model_t(x_lab)
+        l_c = update_lc_theta(opt, fq, x_q_lab, logit_t, y_lab, logit_s, logit_t_pos)
+        l_b = (l_c * f_q).mean()
+        L += l_b
     # print(l_cls)
     # L += l_cls
     

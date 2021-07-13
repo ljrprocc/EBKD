@@ -12,7 +12,7 @@ from math import sqrt
 sys.path.append('..')
 from datasets.cifar100 import CIFAR100Gen
  
-from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras, inception_score
+from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras, inception_score, TVLoss
 from .util_gen import get_replay_buffer, update_theta, ssm_sample, getDirichl
 from .util_gen import get_sample_q, cond_samples, estimate_h, diag_normal_NLL, diag_standard_normal_NLL
 
@@ -78,17 +78,195 @@ def train_vanilla(epoch, train_loader, model, criterion, optimizer, opt):
 
     return top1.avg, losses.avg
 
-def train_nce_G(epoch, train_loader, model_list, optimizer_list, opt, logger):
-    model_vae, model = model_list
-    opt_alpha, opt_theta = optimizer_list
+def train_nce_G(epoch, train_loader, model_list, optimizer_list, opt, logger, buffer, fixed_noise=None):
+    encoder, decoder, model = model_list
+    opt_phi, opt_alpha, opt_theta = optimizer_list
     model.train()
-    model_vae.train()
+    encoder.train()
+    decoder.train()
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    losses_log = AverageMeter()
+    losses_phi = AverageMeter()
+    losses_alpha = AverageMeter()
+    kl_losses = AverageMeter()
+    recon_losses = AverageMeter()
+    fpxys = AverageMeter()
+    fqxys = AverageMeter()
+    elbo = AverageMeter()
+    accs = AverageMeter()
+    # noise = torch.randn(128, 3, 32, 32)
+    train_loader, train_labeled_loader = train_loader
+    fixed_noiseV = torch.autograd.Variable(fixed_noise)
+    # criterion is tv loss
+    plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
+
+    end = time.time()
+    correct = 0
+    total_length = 0
+    d = 0
+    N_train_sets = len(train_loader.dataset)
+    next_mode = 'ebm'
+    sample_q, _ = get_sample_q(opt, l=100)
+    for idx, (input, target) in enumerate(train_loader):
+        data_time.update(time.time() - end)
+        global_iter = epoch * len(train_loader) + idx
+        x_lab, y_lab = train_labeled_loader.__next__()
+        x_lab, y_lab = x_lab.cuda(), y_lab.cuda()
+        # print(next_mode)
+
+        input = input.float()
+        # noise = torch.randn(input.shape[0], 100)
+        if torch.cuda.is_available():
+            input = input.cuda()
+            target = target.cuda()
+        
+        set_require_grad(encoder, True)
+        set_require_grad(decoder, False)
+        set_require_grad(model, False)
+        for i in range(5):
+            '''
+            Encoder update.
+            min_{\phi} E_{z~e(z|x)}[log(p_{\theta}/(p_{\theta}+q_{\alpha}))]
+            '''
+            opt_phi.zero_grad()
+            z, mu, log_var, _ = encoder(x_lab, labels=y_lab)
+            z = z.reshape(z.size(0), z.size(1), 1, 1)
+            e_pos = model(x=x_lab, z=z).squeeze()
+            # print(e_pos.shape)
+            e_pos = torch.gather(e_pos, 1, y_lab[:, None])
+            standard_normal = torch.distributions.Normal(torch.zeros_like(z.squeeze()), torch.ones_like(z.squeeze()))
+            # q_z = torch.distributions.Normal(mu, (log_var / 2).exp())
+            # print(mu.mean(), log_var.mean())
+            # print(z)
+            # print(mu.mean(), log_var.mean())
+            z = z.squeeze()
+            ll_neg = -diag_standard_normal_NLL(z).mean(1)
+            # ll_neg = standard_normal.log_prob(z).mean(1)
+            # print(z.shape, log_var.shape, mu.shape)
+            # log_q_z = q_z.log_prob(z).mean(1)
+            log_q_z = -diag_normal_NLL(z, mu, log_var).mean(1)
+            kl_div = (log_q_z - ll_neg).mean()
+            x_rec = decoder(z, y=y_lab)
+            errRecon = torch.nn.functional.mse_loss(x_rec, x_lab)
+            loss_phi = (errRecon + kl_div) - (e_pos + log_q_z).mean()
+            # print(e_pos.shape, ll_neg.shape)
+            # prob1 = torch.sigmoid(e_pos  - ll_neg).log().mean()
+            # kl div
+            # kl_div = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
+            kl_losses.update(kl_div.item(), input.size(0))
+            # loss_phi = prob1 + 0.01 * kl_div
+            # print(prob1.item(), kl_div.item())
+            losses_phi.update(loss_phi.item(), input.size(0))
+            loss_phi.backward()
+            opt_phi.step()
+            if idx % opt.print_freq == 0:
+                string = 'Epoch: [{0}][{1}/{2}]\tStep: [Encoder]\tTime {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tLoss Encoder {loss_phi.val:.4f} ({loss_phi.avg:.4f})\tKL div {loss_kl.val:.4f}({loss_kl.avg:.4f})'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss_phi=losses_phi, loss_kl=kl_losses)
+                print(string)
+                sys.stdout.flush()
+
+        set_require_grad(encoder, False)
+        set_require_grad(decoder, False)
+        set_require_grad(model, True)
+        for i in range(4):
+            '''
+            EBM update.
+            max_{\phi} E_{z~e(z|x)}[] + E_{z~q_{\alpha}}[]
+            '''
+            opt_theta.zero_grad()
+            z, _, _, y = encoder(x_lab, labels=y_lab)
+            z = z.reshape(z.size(0), z.size(1), 1, 1)
+            e_pos = model(x=x_lab, z=z.detach()).squeeze()
+            e_pos = torch.gather(e_pos, 1, y_lab[:, None])
+            # ll_pos = standard_normal.log_prob(z.detach()).mean(1)
+            # prob1 = torch.sigmoid(e_pos - ll_pos).log().mean()
+            # z_neg = torch.randn_like(z).reshape(z.shape)
+            x_neg, z_neg = decoder.sample(num_samples=opt.batch_size, current_device=input.device, y=y_lab)
+            z_neg = z_neg.reshape(z_neg.size(0), z_neg.size(1), 1, 1)
+            e_neg = model(x=x_neg.detach(), z=z_neg).squeeze()
+            e_neg = torch.gather(e_neg, 1, y_lab[:, None])
+            loss_theta = (e_pos - e_neg).mean()
+            # ll_neg = standard_normal.log_prob(z_neg).mean(1)
+            # print(z.mean().item(), z_neg.mean().item())
+            # print(ll_neg.mean())
+            # prob2 = (1 - torch.sigmoid(e_neg - ll_neg)).log().mean()
+            # loss_theta = -(prob1 + prob2)
+            # print(prob1.mean().item(), prob2.mean().item())
+            losses_log.update(loss_theta.item(), input.size(0))
+            loss_theta.backward()
+            opt_theta.step()
+            if idx % opt.print_freq == 0:
+                string = 'Epoch: [{0}][{1}/{2}]\tStep: [EBM]\tTime {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tLoss CD {loss_log.val:.4f} ({loss_log.avg:.4f})\t'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss_log=losses_log)
+                print(string)
+                sys.stdout.flush()
+        
+        set_require_grad(encoder, False)
+        set_require_grad(decoder, True)
+        set_require_grad(model, False)
+        for i in range(5):
+            '''
+            Decoder update.
+            min_{\alpha} E_{z~q(z|x)}[p_{\alpha}(x|z)]
+            can add some regularization terms, or tv items.
+            '''
+            opt_alpha.zero_grad()
+            z, _, _, _ = encoder(x_lab, labels=y_lab)
+            x_rec = decoder(z.detach(), y=y_lab)
+            loss_rec = torch.nn.functional.mse_loss(x_lab, x_rec)
+            
+            x_neg, z_neg = decoder.sample(num_samples=opt.batch_size, current_device=input.device, y=y_lab)
+            z_neg = z_neg.reshape(z_neg.size(0), z_neg.size(1), 1, 1)
+            e_neg = model(x=x_neg, z=z_neg).squeeze()
+            e_neg = torch.gather(e_neg, 1, y_lab[:, None])
+
+            
+            loss_alpha = loss_rec + e_neg.mean()
+            losses_alpha.update(loss_alpha, input.size(0))
+            recon_losses.update(loss_rec, input.size(0))
+            loss_alpha.backward()
+            opt_alpha.step()
+            if idx % opt.print_freq == 0:
+                string = 'Epoch: [{0}][{1}/{2}]\tStep: [Decoder]\tTime {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tRec Loss {loss_rec.val:.4f} ({loss_rec.avg:.4f})\tLoss Alpha {loss_alpha.val:.4f} ({loss_alpha.avg:.4f})'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss_rec=recon_losses, loss_alpha=losses_alpha)
+                print(string)
+                sys.stdout.flush()
+        
+        # Sampling process.
+        
+        if opt.plot_uncond:
+            y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(input.device)
+            z_q_y = sample_q(model, buffer, y=y_q)
+            with torch.no_grad():
+                x_q_y = decoder(z_q_y, y=y_q)
+            if idx % opt.print_freq == 0:
+                plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q)
+        if opt.plot_cond:  # generate class-conditional samples
+            y = torch.arange(0, opt.n_cls).to(input.device)
+            # print(y.shape)
+            # print(buffer)
+            # z_q_y = sample_q(model, buffer, y=y)
+            # z_q_y = torch.randn(opt.n_cls, opt.latent_dim).to(input.device)
+            with torch.no_grad():
+                x_q_y = decoder(fixed_noiseV.squeeze(), y=y)
+            # print(x_q_y.mean())
+            if idx % opt.print_freq == 0:
+                plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q_y)
+    return losses_log.avg
+
+def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger):
+    '''One epoch for training generator with teacher'''
+    model_t, model_s, model = model_list
+    model.train()
+    model_t.eval()
+    model_s.eval()
+    # module_list[0].eval()
+    # model = module_list[-1]
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
-    losses_theta = AverageMeter()
-    vae_losses = AverageMeter()
-    recon_losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+    fpxs = AverageMeter()
+    fqxs = AverageMeter()
     fpxys = AverageMeter()
     fqxys = AverageMeter()
     accs = AverageMeter()
@@ -101,163 +279,93 @@ def train_nce_G(epoch, train_loader, model_list, optimizer_list, opt, logger):
     sample_q, _ = get_sample_q(opt)
     correct = 0
     total_length = 0
-    d = 0
-    N_train_sets = len(train_loader.dataset)
-    next_mode = 'ebm'
     for idx, (input, target) in enumerate(train_loader):
-        # if idx <= opt.warmup_iters:
-        #     lr = opt.learning_rate * idx / float(opt.warmup_iters)
-        #     for param_group in optimizer.param_groups:
-        #         param_group['lr'] = lr
+        if idx <= opt.warmup_iters:
+            lr = opt.learning_rate_ebm * idx / float(opt.warmup_iters)
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
         data_time.update(time.time() - end)
-        global_iter = epoch * len(train_loader) + idx
         x_lab, y_lab = train_labeled_loader.__next__()
         x_lab, y_lab = x_lab.cuda(), y_lab.cuda()
-        # print(next_mode)
 
         input = input.float()
         # noise = torch.randn(input.shape[0], 100)
         if torch.cuda.is_available():
             input = input.cuda()
             target = target.cuda()
-        if next_mode == 'ebm':
-        # Update theta, conditional ebm
-            # raise ValueError('Invalid next mode.')
-            set_require_grad(model, True)
-            set_require_grad(model_vae, False)
-            opt_theta.zero_grad()
-            # with torch.no_grad():
-            # with torch.no_grad():
-            #     result = 
-            # out_result = model_vae(x_lab, labels=y_lab)
-            loss_theta, log_probs_ebm_pos, log_probs_ebm_neg, _, next_mode = estimate_h(x_lab, y_lab, model_vae, model, mode='ebm', batch_size=opt.batch_size)
-            if loss_theta.abs().item() > 1e8:
-                raise ValueError('Not Converged.')
-            fpxys.update(log_probs_ebm_pos.mean().item(), x_lab.size(0))
-            fqxys.update(log_probs_ebm_neg.mean().item(), x_lab.size(0))
-            # loss_k_theta = -(log_probs_ebm_pos - log_probs_ebm_neg).mean()
-            # loss_theta += loss_k_theta
+            # noise = noise.cuda()
 
-            losses_theta.update(loss_theta.item(), x_lab.size(0))
-            loss_theta = -(loss_theta)
-            # print(model.c)
-            # print(loss_theta, mode)
-            # one = torch.FloatTensor([1]).to(x_lab.device)
-            # mone = one * -1
-            loss_theta.backward()
-            opt_theta.step()
-            next_mode='vae'
+        # ===================forward=====================
+        # input_fake, [mu, logvar] = G(noise, target, return_feat=True)
+        # output = model(input_fake)
+        loss_ebm = 0
+        optimizer.zero_grad()
+        model.zero_grad()
+        if opt.energy == 'mcmc':
+            loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model_list, input, x_lab, y_lab, mode='joint')
+        elif opt.energy == 'ssm':
+            loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
+        else:
+            raise NotImplementedError('Not implemented.')
+        optimizer.step()
+        losses.update(loss_ebm, input.size(0))
+        batch_time.update(time.time() - end)
+        end = time.time()
+        if opt.energy == 'mcmc':
+            if opt.lmda_p_x > 0:
+                fpx, fqx = cache_p_x
+                fpxs.update(fpx, input.size(0))
+                fqxs.update(fqx, input.size(0))
+            if opt.lmda_p_x_y > 0:
+                fpxy, fqxy = cache_p_y
+                fpxys.update(fpxy, input.size(0))
+                fqxys.update(fqxy, input.size(0))
+        elif opt.energy == 'ssm':
+            if opt.lmda_p_x > 0:
+                # print(score_x.shape)
+                fqxs.update(score_x.mean(), input.size(0))
+            if opt.lmda_p_x_y > 0:
+                fqxys.update(score_xy.mean(), input.size(0))
+        
 
-            if idx % opt.print_freq == 0:
-                string = 'Epoch: [{0}][{1}/{2}]\tStep: [EBM]\tTime {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tLoss {loss.val:.4f} ({loss.avg:.4f})'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss=losses_theta)
+        # tensorboard logger
+        l_p_x, l_p_x_y, l_cls = ls
+        acc = torch.sum(torch.argmax(logit, 1) == y_lab).item() / input.size(0)
+        accs.update(acc, input.size(0))
+        global_iter = epoch * len(train_loader) + idx
+        if global_iter % opt.print_freq == 0:
+            logger.log_value('l_p_x', l_p_x, global_iter)
+            logger.log_value('l_p_x_y', l_p_x_y, global_iter)
+            logger.log_value('l_cls', l_cls, global_iter)
+            logger.log_value('accuracy', acc, global_iter)
+        
+        accs.update(acc, input.size(0))
+        # print info
+        if idx % opt.print_freq == 0:
+            string = 'Epoch: [{0}][{1}/{2}]\tTime {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tLoss {loss.val:.4f} ({loss.avg:.4f})\n'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss=losses)
+            if opt.lmda_p_x > 0:
+                if opt.energy != 'ssm':
+                    string += 'p(x) f(x+) {fpx.val:.4f} ({fpx.avg:.4f})\t'.format(fpx=fpxs)
+                # print(fqxs.count)
+                string += 'f(x-) {fqx.val:.4f} ({fqx.avg:.4f})\n'.format(fqx=fqxs)
+            if opt.lmda_p_x_y > 0:
                 if opt.energy != 'ssm':
                     string += 'p(x, y) f(x+) {fpxy.val:.4f} ({fpxy.avg:.4f})\t'.format(fpxy=fpxys)
                 string += 'f(x-) {fqxy.val:.4f} ({fqxy.avg:.4f})\n'.format(fqxy=fqxys)
-                print(string)
-                sys.stdout.flush()
-            
-            if d == 1:
-                next_mode = 'vae'
-                d = 0
-            else:
-                d += 1
-                next_mode = 'ebm'
-
-        # Logger for update of ebm
-        # Including: tensorboard logger and print information
-
-        # Update alpha, conditional vae
-        if next_mode == 'vae':
-            set_require_grad(model, False)
-            set_require_grad(model_vae, True)
-            opt_alpha.zero_grad()
-            # out_result = model_vae(x_lab, labels=y_lab)
-            loss_V, log_probs_ebm_pos, log_probs_ebm_neg, out_result, next_mode = estimate_h(x_lab, y_lab, model_vae, model, mode='vae', batch_size=opt.batch_size)
-            x_rec, x_ori, mu, logvar, rez = out_result
-            train_loss = model_vae.loss_function(*out_result, M_N=opt.batch_size/N_train_sets)
-            # print()
-            loss_alpha = train_loss['loss']
-            # loss_rec = torch.nn.functional.mse_loss(x_rec, x_ori)
-            # logpz = diag_standard_normal_NLL(rez).mean()
-            # logqzx = diag_normal_NLL(rez, mu, logvar).mean()
-            # loss_kl = -logqzx + logpz
-            # ratio = opt.batch_size / N_train_sets
-            # loss_alpha =  loss_rec + ratio * loss_kl
-            # print(loss_alpha)
-            # print(train_loss)
-            if loss_alpha.mean().item() > 1e8:
-                raise ValueError('Not Converged.')
-            
-            # log_probs_ebm_neg = model(x=x_neg, y=y_lab)[0]
-            # x_neg, _, mu, log_var, _ = out_result
-            # # Guassian distribution of q_{\alpha}(x)
-            # dist = torch.distributions.Normal(mu, log_var.exp() / 2)
-            # log_probs_noise_neg = dist.log_prob(x_neg)
-            # log_probs_noise_pos = dist.log_prob(x_lab)
-            # fpxys.update(log_probs_ebm_pos.mean().item(), input.size(0))
-            # fqxys.update(log_probs_ebm_neg.mean().item(), input.size(0))
-            recon_losses.update(train_loss['Reconstruction_Loss'].item(), input.size(0))
-            vae_losses.update(train_loss['KLD'].item(), input.size(0))
-            # recon_losses.update(loss_rec.item(), input.size(0))
-            # vae_losses.update(loss_kl.item(), input.size(0))
-            # torch.nn.utils.clip_grad_norm_(model_vae.parameters(), 0.01)
-            
-            # print(-train_loss['KLD'].item())
-            # h_ebm = torch.sigmoid(log_probs_ebm_pos - log_probs_ebm_neg)
-            # h_noise = torch.sigmoid(log_probs_noise_pos-log_probs_noise_neg)
-            # loss_V = h_ebm.log().mean() + (1 - h_noise).log().mean()
-            # loss_V = -loss_V
-            # print(loss_alpha)
-            loss_alpha = loss_alpha + opt.lmda_v*loss_V
-            # print(loss_alpha)
-            loss_alpha.backward()
-            if log_probs_ebm_neg.mean().abs().item() > 10000:
-                print('Diverge detected. The logs:')
-                print('1. The log probability of noise sampled negative sample by ebm model. Also called negative energy value.')
-                print(log_probs_ebm_neg.mean().item(), log_probs_ebm_pos.mean().item())
-                
-                print('2. Norm of energy model parameter and grads.')
-                for p in model.named_parameters():
-                    print('Name: {}'.format(p[0]))
-                    print(p[1].mean())
-                    # print(type(p[1].grad))
-                    print(p[1].grad.mean())
-                print('3. Norm of vae Encoder and decoder parameter and grads.')
-                for p in model_vae.named_parameters():
-                    print('Name: {}'.format(p[0]))
-                    print(p[1].mean())
-                    print(p[1].grad.mean())
-                raise ValueError('Not converged. Please check the possible divergence reason above to check: EBM, VAE or logistic loss function.')
-            losses.update(loss_alpha.item(), input.size(0))
-            opt_alpha.step()
-            batch_time.update(time.time() - end)
-            end = time.time()
-            next_mode = 'ebm'
-
-            if idx % opt.print_freq == 0:
-                string = 'Epoch: [{0}][{1}/{2}]\tStep: [VAE]\tTime {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tLoss {loss.val:.4f} ({loss.avg:.4f})\tRec Loss {recon_loss.val:.4f} ({recon_loss.avg:.4f})\tKLD {kld.val:.4f} ({kld.avg:.4f})'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss=losses, recon_loss=recon_losses, kld=vae_losses)
-
-                # string += 'Acc: {accs.val:.4f} ({accs.avg:.4f})\n'.format(accs=accs)
-                print(string)
-                sys.stdout.flush()
-        
-        # next_mode = 'vae'
-        # print(next_mode)
-        if idx % opt.print_freq == 0:
+            string += 'Acc: {accs.val:.4f} ({accs.avg:.4f})\n'.format(accs=accs)
+            print(string)
+            sys.stdout.flush()
             if opt.plot_uncond:
                 y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(input.device)
-                x_q = model_vae.sample(num_samples=opt.batch_size, current_device=input.device, labels=y_q, train=False)
+                x_q = sample_q(model, buffer, y=y_q)
                 plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q)
             if opt.plot_cond:  # generate class-conditional samples
                 y = torch.arange(0, opt.n_cls).to(input.device)
                 # print(y.shape)
-                x_q_y = model_vae.sample(num_samples=opt.n_cls, current_device=input.device, labels=y, train=False)
+                x_q_y = sample_q(model, buffer, y=y)
                 plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q_y)
-        
 
     return losses.avg
-
-
 
 
 def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger):
@@ -288,10 +396,10 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
     total_length = 0
     for idx, (input, target) in enumerate(train_loader):
         if idx <= opt.warmup_iters:
-            lr = opt.learning_rate * idx / float(opt.warmup_iters)
+            lr = opt.learning_rate_ebm * idx / float(opt.warmup_iters)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
-
+        data_time.update(time.time() - end)
         x_lab, y_lab = train_labeled_loader.__next__()
         x_lab, y_lab = x_lab.cuda(), y_lab.cuda()
 
@@ -309,7 +417,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
         optimizer.zero_grad()
         model.zero_grad()
         if opt.energy == 'mcmc':
-            loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model, input, x_lab, y_lab, model_t=model_t)    
+            loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model, input, x_lab, y_lab)
         elif opt.energy == 'ssm':
             loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
         else:
