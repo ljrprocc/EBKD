@@ -9,16 +9,45 @@ Original Author: Wei Yang
 
 __all__ = ['wrn']
 
+class Identity(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+    def forward(self, x):
+        return x
+
+def get_norm(norm='none'):
+    if norm == 'batch':
+        norm_layer = nn.BatchNorm2d
+    elif norm  == 'instance':
+        norm_layer = nn.InstanceNorm2d
+    elif norm == 'none' or norm == 'spectral':
+        norm_layer = Identity
+    else:
+        raise NotImplementedError('Son of a total bitch.')
+    return norm_layer
+
+def get_act(act='relu'):
+    if act == 'relu':
+        relu_layer = nn.ReLU(True)
+    elif act == 'leaky':
+        relu_layer = nn.LeakyReLU(0.2, True)
+    elif act == 'swish':
+        relu_layer = nn.SiLU(True)
+    else:
+        raise NotImplementedError('Son of a total bitch.')
+    return relu_layer
 
 class BasicBlock(nn.Module):
-    def __init__(self, in_planes, out_planes, stride, dropRate=0.0):
+    def __init__(self, in_planes, out_planes, stride, dropRate=0.0, norm='none', act='relu'):
         super(BasicBlock, self).__init__()
-        self.bn1 = nn.BatchNorm2d(in_planes)
-        self.relu1 = nn.ReLU(inplace=True)
+        self.norm_layer = get_norm(norm=norm)
+        self.act_layer = get_act(act=act)
+        self.bn1 = self.norm_layer(in_planes)
+        self.relu1 = self.act_layer
         self.conv1 = nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                                padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(out_planes)
-        self.relu2 = nn.ReLU(inplace=True)
+        self.bn2 = self.norm_layer(out_planes)
+        self.relu2 = self.act_layer
         self.conv2 = nn.Conv2d(out_planes, out_planes, kernel_size=3, stride=1,
                                padding=1, bias=False)
         self.droprate = dropRate
@@ -39,14 +68,16 @@ class BasicBlock(nn.Module):
 
 
 class NetworkBlock(nn.Module):
-    def __init__(self, nb_layers, in_planes, out_planes, block, stride, dropRate=0.0):
+    def __init__(self, nb_layers, in_planes, out_planes, block, stride, dropRate=0.0, act='relu', norm='none'):
         super(NetworkBlock, self).__init__()
+        self.act = act
+        self.norm = norm
         self.layer = self._make_layer(block, in_planes, out_planes, nb_layers, stride, dropRate)
 
     def _make_layer(self, block, in_planes, out_planes, nb_layers, stride, dropRate):
         layers = []
         for i in range(nb_layers):
-            layers.append(block(i == 0 and in_planes or out_planes, out_planes, i == 0 and stride or 1, dropRate))
+            layers.append(block(i == 0 and in_planes or out_planes, out_planes, i == 0 and stride or 1, dropRate, norm=self.norm, act=self.act))
         return nn.Sequential(*layers)
 
     def forward(self, x):
@@ -54,24 +85,26 @@ class NetworkBlock(nn.Module):
 
 
 class WideResNet(nn.Module):
-    def __init__(self, depth, num_classes, widen_factor=1, dropRate=0.0):
+    def __init__(self, depth, num_classes, widen_factor=1, dropRate=0.0, act='relu', norm='none'):
         super(WideResNet, self).__init__()
         nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
         assert (depth - 4) % 6 == 0, 'depth should be 6n+4'
         n = (depth - 4) // 6
         block = BasicBlock
+        act_layer = get_act(act)
+        norm_layer = get_norm(norm)
         # 1st conv before any network block
         self.conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1,
                                padding=1, bias=False)
         # 1st block
-        self.block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropRate)
+        self.block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropRate, act=act, norm=norm)
         # 2nd block
-        self.block2 = NetworkBlock(n, nChannels[1], nChannels[2], block, 2, dropRate)
+        self.block2 = NetworkBlock(n, nChannels[1], nChannels[2], block, 2, dropRate, act=act, norm=norm)
         # 3rd block
-        self.block3 = NetworkBlock(n, nChannels[2], nChannels[3], block, 2, dropRate)
+        self.block3 = NetworkBlock(n, nChannels[2], nChannels[3], block, 2, dropRate, act=act, norm=norm)
         # global average pooling and classifier
-        self.bn1 = nn.BatchNorm2d(nChannels[3])
-        self.relu = nn.ReLU(inplace=True)
+        self.bn1 = norm_layer(nChannels[3])
+        self.relu = act_layer
         self.fc = nn.Linear(nChannels[3], num_classes)
         self.nChannels = nChannels[3]
         self.last_dim = nChannels[3]
@@ -101,7 +134,7 @@ class WideResNet(nn.Module):
 
         return [bn1, bn2, bn3]
 
-    def forward(self, x, is_feat=False, preact=False):
+    def forward(self, x, is_feat=False, preact=False, z=None):
         out = self.conv1(x)
         f0 = out
         out = self.block1(out)
@@ -150,6 +183,10 @@ def wrn_16_2(**kwargs):
 
 def wrn_16_1(**kwargs):
     model = WideResNet(depth=16, widen_factor=1, **kwargs)
+    return model
+
+def wrn_28_10(**kwargs):
+    model = WideResNet(depth=28, widen_factor=10, **kwargs)
     return model
 
 

@@ -81,7 +81,7 @@ class CCF(FF):
         if y is not None:
             ne = torch.gather(logits, 1, y[:, None])
         else:
-            ne = torch.log(logits.exp().sum(1))
+            ne = logits.logsumexp(1)
         if is_feat:
             return_list = [feats, ne]
         else:

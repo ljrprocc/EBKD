@@ -329,7 +329,7 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
         
 
         # tensorboard logger
-        l_p_x, l_p_x_y, l_cls = ls
+        l_p_x, l_p_x_y, l_cls, l_c, l_c_k_minus_1 = ls
         acc = torch.sum(torch.argmax(logit, 1) == y_lab).item() / input.size(0)
         accs.update(acc, input.size(0))
         global_iter = epoch * len(train_loader) + idx
@@ -337,6 +337,8 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
             logger.log_value('l_p_x', l_p_x, global_iter)
             logger.log_value('l_p_x_y', l_p_x_y, global_iter)
             logger.log_value('l_cls', l_cls, global_iter)
+            logger.log_value('l_image_c_k', l_c, global_iter)
+            logger.log_value('l_image_c_k_1', l_c_k_minus_1, global_iter)
             logger.log_value('accuracy', acc, global_iter)
         
         accs.update(acc, input.size(0))
@@ -357,18 +359,19 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
             sys.stdout.flush()
             if opt.plot_uncond:
                 y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(input.device)
-                x_q = sample_q(model, buffer, y=y_q)
+                x_q, _ = sample_q(model, buffer, y=y_q)
                 plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q)
             if opt.plot_cond:  # generate class-conditional samples
                 y = torch.arange(0, opt.n_cls).to(input.device)
                 # print(y.shape)
-                x_q_y = sample_q(model, buffer, y=y)
+                x_q_y, _ = sample_q(model, buffer, y=y)
                 plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q_y)
 
     return losses.avg
 
 
 def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger):
+    '''One epoch for training generator with teacher'''
     '''One epoch for training generator with teacher'''
     model_t, model = model_list
     model.train()
@@ -417,7 +420,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
         optimizer.zero_grad()
         model.zero_grad()
         if opt.energy == 'mcmc':
-            loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model, input, x_lab, y_lab)
+            loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model_list, input, x_lab, y_lab)    
         elif opt.energy == 'ssm':
             loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
         else:
@@ -472,12 +475,12 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
             sys.stdout.flush()
             if opt.plot_uncond:
                 y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(input.device)
-                x_q = sample_q(model, buffer, y=y_q)
+                x_q, _ = sample_q(model, buffer, y=y_q)
                 plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q)
             if opt.plot_cond:  # generate class-conditional samples
                 y = torch.arange(0, opt.n_cls).to(input.device)
                 # print(y.shape)
-                x_q_y = sample_q(model, buffer, y=y)
+                x_q_y, _ = sample_q(model, buffer, y=y)
                 plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q_y)
 
     return losses.avg

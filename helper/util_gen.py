@@ -159,17 +159,28 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
         # sgld
         samples = []
         now_step_size = opts.step_size
+        x_k_pre = init_sample
         for k in range(n_steps):
             f_prime = torch.autograd.grad(f(x_k, y=y)[0].sum(), [x_k], retain_graph=True)[0]
-            x_k.data += now_step_size * f_prime + 0.01 * torch.randn_like(x_k)
-            now_step_size *= 0.99
-            if open_debug:
-                samples.append(x_k.detach())
-            if open_clip_grad:
-                torch.nn.utils.clip_grad_norm_(f.parameters(), max_norm=open_clip_grad)
+            noise = 0.01 * torch.randn_like(x_k)
+            x_k = x_k + now_step_size * f_prime + noise
+            # now_step_size *= 0.99
+            # print((now_step_size * f_prime + noise).mean())
+            samples.append((x_k.detach(), x_k_pre, noise))
+            # if open_clip_grad:
+            #     torch.nn.utils.clip_grad_norm_(f.parameters(), max_norm=open_clip_grad)
                 # plot('{}/debug_{}.png'.format(opts.save_folder, k))
                 # exit(-1)
+            x_k_pre = x_k.detach()
+            
+            
         f.train()
+        # exit(-1)
+        # idx = random.randint(1, n_steps - 1)
+        # sample_at_k = samples[idx]
+        # print(idx, n_steps)
+        # sample_at_k = x_k, init_sample, noise
+        # print((x_k - init_sample).mean())
         final_samples = x_k.detach()
         # update replay buffer
         if len(replay_buffer) > 0:
@@ -177,7 +188,7 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
         if open_debug:
             return final_samples, samples
         else:
-            return final_samples
+            return final_samples, samples
 
     def sample_q_xy(f, replay_buffer, y=None, n_steps=opts.g_steps):
         f.eval()
@@ -251,7 +262,7 @@ def get_image_prior_losses(inputs):
 
     return loss_var_l2
 
-def cond_samples(model, replay_buffer, opt, fresh=False):
+def cond_samples(model, replay_buffer, opt, fresh=False, use_buffer=True):
     sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     n_cls = opt.n_cls
@@ -266,10 +277,15 @@ def cond_samples(model, replay_buffer, opt, fresh=False):
         else:
             for j in range(meta_buffer_size):
                 global_idx = i*meta_buffer_size+j
-                y = torch.LongTensor([i]).cuda()
+                x = replay_buffer[global_idx].unsqueeze(0).cuda()
+                if use_buffer:
+                    logit = model(x, cls_mode=True)
+                    y = logit.argmax(1)
+                else:
+                    y = torch.LongTensor([i]).cuda()
                 plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), replay_buffer[global_idx])
-                output = model(replay_buffer[global_idx].unsqueeze(0).cuda())[0].mean()
-                output_xy = model(replay_buffer[global_idx].unsqueeze(0).cuda(), y=y)[0].mean()
+                output = model(x)[0].mean()
+                output_xy = model(x, y=y)[0].mean()
                 write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
                 f.write(write_str)
 
@@ -304,8 +320,8 @@ def cond_samples(model, replay_buffer, opt, fresh=False):
     #     if this_im.size(0) > 0:
     #         plot('{}/samples_{}.png'.format(opt.save_dir, i), this_im)
 
-def update_lc_theta(opt, neg_out, x_q, t_logit, y_gt, s_logit, t_logit_true):
-    l_tv = get_image_prior_losses(x_q)
+def update_lc_theta(opt, x_q, t_logit, y_gt, s_logit, t_logit_true):
+    # l_tv = get_image_prior_losses(x_q)
     n_cls = opt.n_cls
     y_one_hot = torch.eye(n_cls)[y_gt].to(x_q.device)
     l_cls = -torch.sum(torch.log_softmax(t_logit, 1) * y_one_hot, 1)
@@ -314,9 +330,10 @@ def update_lc_theta(opt, neg_out, x_q, t_logit, y_gt, s_logit, t_logit_true):
     # print(l_cls.shape, l_2.shape, l_tv.shape)
     # KL(p_t(y|x) || p_s(y|x))
     l_e = torch.sum(torch.softmax(t_logit, 1) * (torch.log_softmax(s_logit, 1)- torch.log_softmax(t_logit_true, 1)), 1)
-    lc = opt.lmda_l2 * l_2 + opt.lmda_tv * l_tv + l_cls + opt.lmda_e * l_e
-    c = lc.mean()
-    return lc - c
+    lc = opt.lmda_l2 * l_2 + l_cls + opt.lmda_e * l_e
+    # print(lc.mean(), (lc - lc.mean()).mean())
+    # c = lc.mean()
+    return lc
 
 def kl_div(mu1, mu2, std1, std2):
     kl_1 = -0.5 * torch.sum(1 + std1 - mu1 ** 2 - std1.exp(), dim = 1)
@@ -334,8 +351,11 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
     L = 0
     if mode == 'joint':
         model_t, model_s, model = models
+        model_t.eval()
+        model_s.eval()
     else:
         model_t, model = models
+        model_t.eval()
     sample_q, sample_q_xy = get_sample_q(opt, x_p.device)
     cache_p_x = None
     cache_p_x_y = None
@@ -345,9 +365,9 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(x_p.device)
         # The process of get x_q~p_{\theta}(x), stochastic process of x*=argmin_{x}(E_{\theta}(x))
         # print(replay_buffer.shape, y_q.shape)
-        x_q = sample_q(model, replay_buffer, y=y_q,open_clip_grad=0.1)
-        f_p = model(x_p, return_kl=True)[0]
-        f_q = model(x_q, return_kl=True)[0]
+        x_q, samples = sample_q(model, replay_buffer, y=y_q,open_clip_grad=0.1)
+        f_p = model(x_p)[0]
+        f_q = model(x_q)[0]
         # stdp = torch.exp(logp / 2)
         # stdq = torch.exp(logq / 2)
         # print(stdp, stdq)
@@ -363,7 +383,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
     # Followed by the idea of jem
 
     if opt.lmda_p_x_y > 0:
-        x_q_lab = sample_q(model, replay_buffer, y=y_lab, open_clip_grad=0.1)
+        x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab, open_clip_grad=0.1)
         # -E_{\theta}, bigger better.
         f_p = model(x_lab, y_lab, py=opt.y)[0]
         f_q = model(x_q_lab, y_lab, py=opt.y)[0]
@@ -391,12 +411,42 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
     # l_cls = -torch.log_softmax(logit, 1).mean() - math.log(opt.n_cls)
     ls.append(l_cls)
     if mode == 'joint':
-        logit_s = model_s(x_q_lab)
-        logit_t = model_t(x_q_lab)
+        x_pos = x_lab
         logit_t_pos = model_t(x_lab)
-        l_c = update_lc_theta(opt, fq, x_q_lab, logit_t, y_lab, logit_s, logit_t_pos)
-        l_b = (l_c * f_q).mean()
-        L += l_b
+        l_b_s = []
+        for sample_at_k in samples[3:8]:
+            x_k, x_k_minus_1, noise = sample_at_k
+            # x_k lc calculation
+            # x_neg = x_k
+            # print(x_k_minus_1.shape)
+            logit_s = model_s(x_k)
+            logit_t = model_t(x_k)
+            # print(logit_s.requires_grad, logit_t.requires_grad)
+            # f_q_k = model(x_neg, y=y_lab, py=opt.y)[0]
+            l_c_k = update_lc_theta(opt, x_k, logit_t, y_lab, logit_s, logit_t_pos) # l_c_k.requires_grad = False
+            # x_{k - 1} lc calculation
+            # x_neg = x_k_minus_1
+            with torch.no_grad():
+                logit_s = model_s(x_k_minus_1)
+                logit_t = model_t(x_k_minus_1)
+                
+                # f_q_k_minus_1 = model(x_neg, y=y_lab, py=opt.y)[0]
+                l_c_k_minus_1 = update_lc_theta(opt, x_k_minus_1, logit_t, y_lab, logit_s, logit_t_pos) # l_c_{k-1}.requires_grad = False
+            # lc target updation
+            # Here p_{\theta} ~ N(x_{k - 1} + \sigma_{k-1}^2 s_{\theta}(x_{k - 1}), \sigma_{k-1}^2)
+            # The mu_{\theta} here using minus operation, to avoid the second calculation of gradient.
+            mu = x_k - noise # mu.requires_grad = True
+            sigma = 0.01 * torch.ones_like(x_k)
+
+            nll = diag_normal_NLL(torch.flatten(x_k, 1), torch.flatten(mu, 1), torch.flatten(sigma, 1)).mean(1)
+            l_b = ((l_c_k_minus_1 - l_c_k) * nll).mean()
+            l_b_s.append(l_b * 20)
+            # print(l_b, (l_c_k_minus_1).mean(), l_c_k.mean())
+            # L += l_b * 100
+        # ls.append(l_b)
+        sum(l_b_s).backward()
+        ls.append(l_c_k.mean())
+        ls.append(l_c_k_minus_1.mean())
     # print(l_cls)
     # L += l_cls
     
