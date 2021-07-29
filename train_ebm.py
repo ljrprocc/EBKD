@@ -47,10 +47,6 @@ def parse_option():
     parser.add_argument('--weight_decay', type=float, default=0.0, help='weight decay')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 
-    # Generator Details
-    parser.add_argument('--g_steps', type=int, default=100, help='Updating steps for x')
-    parser.add_argument('--g_lr', type=float, default=0.025, help='Start learning rate of update_stpes')
-
     # dataset
     parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100', 'imagenet'], help='dataset')
 
@@ -59,9 +55,9 @@ def parse_option():
 
     # model
     parser.add_argument('--model', type=str, default='resnet110',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet20x10' ])
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet28x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet20x10' ])
     parser.add_argument('--model_s', type=str, default='resnet8x4',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10'])
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet28x10', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10'])
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
     parser.add_argument('--act', type=str, default='relu', choices=['relu', 'leaky', 'swish'])
     
@@ -75,7 +71,7 @@ def parse_option():
     parser.add_argument('--lmda_p_x', default=1., type=float, help='Hyperparameter for building p(x)')
     parser.add_argument('--lmda_p_x_y', default=0., type=float, help='Hyperparameter for building p(x,y)')
     parser.add_argument('--lmda_kl', default=0.3, type=float, help='Hyperparameter for kl divergence.')
-    parser.add_argument('--steps', default=20, type=int, help='Total MCMC steps for generating images.')
+    parser.add_argument('--g_steps', default=20, type=int, help='Total MCMC steps for generating images.')
     parser.add_argument('--step_size', default=1, type=float, help='learning rate of MCMC updation.')
     parser.add_argument('--capcitiy', default=10000, type=int, help='Capcity of sample buffer.')
     parser.add_argument('--trial', type=str, default='1', help='trial id')
@@ -158,6 +154,7 @@ def main():
         os.mkdir(opt.save_dir)
     # dataloader
     opt.datafree = False
+    
     if opt.dataset == 'cifar100':
         train_loader, val_loader = get_cifar100_dataloaders(opt, batch_size=opt.batch_size, num_workers=opt.num_workers, use_subdataset=True)
         opt.n_cls = 100
@@ -166,12 +163,18 @@ def main():
         opt.n_cls = 1000
     else:
         raise NotImplementedError(opt.dataset)
-    
     # model
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
-    model = load_teacher(opt.path_t, opt)
-    model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm)
+    
+    d, w = opt.model_s.split('x')[0][-2:], opt.model_s.split('x')[1]
+
+    model_score = model_dict[opt.model_s](depth=int(d), widen_factor=int(w), num_classes=opt.n_cls, norm=opt.norm)
+    
+    # model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm)
     model_score = model_dict['Score'](model=model_score, n_cls=opt.n_cls)
+    
+    buffer, _ = get_replay_buffer(opt, model=model_score)
+    model = load_teacher(opt.path_t, opt)
     # model = model_dict['Score'](model=model, n_cls=opt.n_cls)
     # print(model)
     optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate, betas=[0.9, 0.999],  weight_decay=opt.weight_decay)
@@ -182,14 +185,14 @@ def main():
         model = model.cuda()
         model_score = model_score.cuda()
         criterion = criterion.cuda()
-        cudnns.benchmark = True
 
 
     # tensorboard
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
-    buffer, _ = get_replay_buffer(opt, model=model_score)
+    
     opt.y = getDirichl(opt.path_t)
+    print(opt)
     # print(opt.y)
     # routine
     for epoch in range(opt.init_epochs+1, opt.epochs + 1):
@@ -221,6 +224,11 @@ def main():
             torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_epoch_{epoch}.pts'.format(epoch=epoch)))
 
 if __name__ == '__main__':
-    torch.manual_seed(1234)
-    torch.cuda.manual_seed(1234)
+    import random
+    random.seed(1)
+    torch.manual_seed(1)
+    torch.cuda.manual_seed_all(1)
+    cudnns.benchmark = True
+    cudnns.enabled = True
+    cudnns.deterministic = True
     main()

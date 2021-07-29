@@ -55,6 +55,7 @@ class wide_basic(nn.Module):
             )
 
     def forward(self, x):
+        # print(self.dropout, self.conv1, self.lrelu, self.bn1)
         out = self.dropout(self.conv1(self.lrelu(self.bn1(x))))
         out = self.conv2(self.lrelu(self.bn2(out)))
         out += self.shortcut(x)
@@ -63,7 +64,7 @@ class wide_basic(nn.Module):
 
 
 def get_norm(n_filters, norm):
-    if norm is None:
+    if norm == 'none':
         return Identity()
     elif norm == "batch":
         return nn.BatchNorm2d(n_filters, momentum=0.9)
@@ -110,15 +111,19 @@ class Wide_ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x, vx=None):
-        out = self.conv1(x)
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = self.lrelu(self.bn1(out))
+    def forward(self, x, vx=None, is_feat=False, preact=False):
+        f1 = self.conv1(x)
+        f2 = self.layer1(f1)
+        f3 = self.layer2(f2)
+        f4 = self.layer3(f3)
+        out = self.lrelu(self.bn1(f4))
         if self.sum_pool:
             out = out.view(out.size(0), out.size(1), -1).sum(2)
         else:
             out = F.avg_pool2d(out, 8)
-        out = out.view(out.size(0), -1)
-        return out
+        f5 = out.view(out.size(0), -1)
+        out = self.linear(f5)
+        if is_feat:
+            return [f1, f2, f3, f4, f5], out
+        else:
+            return out
