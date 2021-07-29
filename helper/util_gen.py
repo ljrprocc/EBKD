@@ -13,8 +13,81 @@ from torch.distributions.dirichlet import Dirichlet
 import torchvision.utils as vutils
 import cv2
 
-def init_random(s1, s2, s3, s4):
-    return torch.FloatTensor(s1, s2, s3, s4).uniform_(-1, 1)
+def init_random(s):
+    # print(s)
+    return torch.FloatTensor(*s).uniform_(-1, 1)
+
+def diag_normal_NLL(z, mu, log_var):
+    '''
+    Directly calculate the log probability without distribution sampling. It can modeling the sample process q_{\phi}(z | x)
+    Input: [b, nz]
+    '''
+    nll = 0.5 * log_var + 0.5 * ((z - mu) * (z - mu) / (1e-6 + log_var.exp()))
+    return nll.squeeze()
+
+def diag_standard_normal_NLL(z):
+    '''
+    Sample from q_{\alpha}(z) ~ N(0, I)
+    '''
+    nll = 0.5 * (z * z)
+    return nll.squeeze()
+
+def estimate_h(x_lab, y_lab, model_vae, model, mode='ebm', batch_size=128):
+    results = model_vae(x_lab, labels=y_lab)
+    x_rec, mu, log_var, z = results[0], results[2], results[3], results[4]
+    if mode == 'ebm':
+        mu = mu.detach()
+        log_var = log_var.detach()
+        z = z.detach()
+    # print(mu, log_var)
+    
+    dist = torch.distributions.Normal(mu, (log_var / 2).exp())
+    dist_neg = torch.distributions.Normal(torch.zeros_like(z), torch.ones_like(z))
+    logqz = dist.log_prob(z).mean(1)
+
+    logqxgivenz = -torch.mean((x_rec - x_lab) ** 2, (1,2,3))
+    log_probs_noise_pos = logqz + logqxgivenz
+    
+    # print(z, mu)
+    x_neg, z_neg, logqxgivenz_neg = model_vae.sample(num_samples=batch_size, current_device=0, labels=y_lab, train=True)
+    if mode == 'ebm':
+        z_neg = z_neg.detach()
+        x_neg = x_neg.detach()
+    logqz_neg = dist_neg.log_prob(z_neg).mean(1)
+    # print(x_neg.requires_grad, x_neg_rec.requires_grad, mode)
+    
+    # logqz
+    log_probs_noise_neg = logqz_neg
+
+    # print(mu_neg.shape, log_var_neg.shape, mu.shape, log_var.shape)
+    # print(log_var.mean().item(), log_var_neg.mean().item())
+    
+    # dist_neg = torch.distributions.Normal(mu_neg, (log_var_neg/2).exp() / 2)
+    # log_probs_noise_neg = dist.log_prob(z_neg).mean(1)
+    # print(model.c)
+    log_probs_ebm_pos = model(x=x_lab, y=y_lab, z=z)[0]
+    log_probs_ebm_neg = model(x=x_neg, y=y_lab, z=z_neg)[0]
+    
+    logit_ebm = torch.cat([log_probs_ebm_pos, log_probs_ebm_neg], 1)
+    if mode == 'vae':
+        logit_ebm = logit_ebm.detach()
+    logit_noise = torch.cat([log_probs_noise_pos.unsqueeze(1), log_probs_noise_neg.unsqueeze(1)], 1)
+    logit_true = logit_ebm - logit_noise
+    label = torch.zeros_like(logit_ebm)
+    label[:, 0] = 1
+    loss_theta = torch.nn.BCEWithLogitsLoss(reduction='none')(logit_true, label).sum(1)
+    
+    h_pos = torch.sigmoid(log_probs_ebm_pos.squeeze() - log_probs_noise_pos)
+    h_neg = torch.sigmoid(log_probs_ebm_neg.squeeze() - log_probs_noise_neg)
+    # print((h_pos > 0.5).shape)
+    # print(( log_probs_noise_pos).mean().item(), (log_probs_noise_neg).mean().item())
+    acc = ((h_pos > 0.5).sum() + (h_neg < 0.5).sum()) / (len(x_lab) + len(x_neg))
+    if acc >= 0.5:
+        next_mode = 'vae'
+    else:
+        next_mode = 'ebm'
+
+    return -loss_theta.mean(), log_probs_ebm_pos, log_probs_ebm_neg, results, next_mode
 
 def get_replay_buffer(opt, model=None):
     bs = opt.capcitiy
@@ -24,7 +97,8 @@ def get_replay_buffer(opt, model=None):
     else:
         im_size = 224
     if not opt.load_buffer_path:
-        replay_buffer = init_random(bs, nc, im_size, im_size)
+        # replay_buffer = init_random((bs, opt.latent_dim))
+        replay_buffer = init_random((bs, nc, im_size, im_size))
     else:
         print('Loading replay buffer from local..')
         ckpt_dict = torch.load(opt.load_buffer_path)
@@ -42,17 +116,7 @@ def getDirichl(net_path, scale=1, sim_scale=1):
     X = diri.rsample()
     return X.mean(0)
 
-    # for i in range(num_classes):
-    #     alpha = sim_matrix[i, :]
-    #     alpha_normalized = (alpha - torch.min(alpha)) / (torch.max(alpha) - torch.min(alpha))
-    #     alpha_normalized = alpha_normalized * scale + 0.000001
-    #     # print(alpha_normalized.device)
-    #     diri = Dirichlet(alpha_normalized)
-    #     X += diri.rsample((bs, ))
-
-    # return X / num_classes
-
-def get_sample_q(opts, device=None, open_debug=False):
+def get_sample_q(opts, device=None, open_debug=False, l=None):
     # bs = opt.capcitiy
     nc = 3
     if opts.dataset == 'cifar100':
@@ -65,19 +129,24 @@ def get_sample_q(opts, device=None, open_debug=False):
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     def sample_p_0(replay_buffer, bs, y=None):
         if len(replay_buffer) == 0:
-            return init_random(bs, nc, im_size, im_size), []
+            return init_random((bs, nc, im_size, im_size)), []
+            # return init_random((bs, l)), []
         buffer_size = len(replay_buffer) if y is None else len(replay_buffer) // opts.n_cls
+        # print(replay_buffer)
         inds = torch.randint(0, buffer_size, (bs,))
         # if cond, convert inds to class conditional inds
         if y is not None:
             inds = y.cpu() * buffer_size + inds
         buffer_samples = replay_buffer[inds]
-        random_samples = init_random(bs, nc, im_size, im_size)
+        random_samples = init_random((bs, nc, im_size, im_size))
+        # s = (bs, opts.latent_dim)
+        # random_samples = init_random(s)
         choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None, None, None]
+        # choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None]
         samples = choose_random * random_samples + (1 - choose_random) * buffer_samples
         return samples.cuda(), inds
 
-    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False):
+    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False, open_clip_grad=None):
         """this func takes in replay_buffer now so we have the option to sample from
         scratch (i.e. replay_buffer==[]).  See test_wrn_ebm.py for example.
         """
@@ -90,12 +159,28 @@ def get_sample_q(opts, device=None, open_debug=False):
         # sgld
         samples = []
         now_step_size = opts.step_size
+        x_k_pre = init_sample
         for k in range(n_steps):
             f_prime = torch.autograd.grad(f(x_k, y=y)[0].sum(), [x_k], retain_graph=True)[0]
-            x_k.data += now_step_size * f_prime + 0.01 * torch.randn_like(x_k)
-            if open_debug:
-                samples.append(x_k.detach())
+            noise = 0.01 * torch.randn_like(x_k)
+            x_k.data += now_step_size * f_prime + noise
+            # now_step_size *= 0.99
+            # print((now_step_size * f_prime + noise).mean())
+            samples.append((x_k.detach(), x_k_pre, noise))
+            # if open_clip_grad:
+            #     torch.nn.utils.clip_grad_norm_(f.parameters(), max_norm=open_clip_grad)
+                # plot('{}/debug_{}.png'.format(opts.save_folder, k))
+                # exit(-1)
+            x_k_pre = x_k.detach()
+            
+            
         f.train()
+        # exit(-1)
+        # idx = random.randint(1, n_steps - 1)
+        # sample_at_k = samples[idx]
+        # print(idx, n_steps)
+        # sample_at_k = x_k, init_sample, noise
+        # print((x_k - init_sample).mean())
         final_samples = x_k.detach()
         # update replay buffer
         if len(replay_buffer) > 0:
@@ -103,7 +188,7 @@ def get_sample_q(opts, device=None, open_debug=False):
         if open_debug:
             return final_samples, samples
         else:
-            return final_samples
+            return final_samples, samples
 
     def sample_q_xy(f, replay_buffer, y=None, n_steps=opts.g_steps):
         f.eval()
@@ -156,8 +241,8 @@ def ssm_sample(opt, replay_buffer, model, x_p, x_lab, y_lab):
     score_q_xy = 0
     if opt.lmda_p_x > 0:
         y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(x_p.device)
-        x_q = sample_q(model, replay_buffer, y=y_q)
-        loss_x, score_qx = sliced_VR_score_matching(model, x_q)
+        x_q = sample_q(model, replay_buffer, y=y_q, open_clip_grad=0.1)
+        loss_x, score_qx = sliced_VR_score_matching(model, x_q, open_clip_grad=0.1)
         L += loss_x * opt.lmda_p_x
     if opt.lmda_p_x_y > 0:
         x_q_lab = sample_q(model, replay_buffer, y=y_lab)
@@ -236,17 +321,20 @@ def cond_samples(model, replay_buffer, opt, fresh=False, use_buffer=False):
     #     if this_im.size(0) > 0:
     #         plot('{}/samples_{}.png'.format(opt.save_dir, i), this_im)
 
-def update_lc_theta(opt, neg_out, x_q, logit, y_gt):
-    l_tv = get_image_prior_losses(x_q)
+def update_lc_theta(opt, x_q, t_logit, y_gt, s_logit, t_logit_true):
+    # l_tv = get_image_prior_losses(x_q)
     n_cls = opt.n_cls
     y_one_hot = torch.eye(n_cls)[y_gt].to(x_q.device)
-    l_cls = -torch.sum(torch.log_softmax(logit, 1) * y_one_hot, 1)
+    l_cls = -torch.sum(torch.log_softmax(t_logit, 1) * y_one_hot, 1)
     bs = x_q.size(0)
     l_2 = torch.norm(x_q.view(bs, -1), dim=-1)
     # print(l_cls.shape, l_2.shape, l_tv.shape)
-    lc = opt.lmda_l2 * l_2 + opt.lmda_tv * l_tv + l_cls
-    l_backward = (lc * neg_out).mean() - lc.mean() * neg_out.mean()
-    return l_backward
+    # KL(p_t(y|x) || p_s(y|x))
+    l_e = torch.sum(torch.softmax(t_logit, 1) * (torch.log_softmax(s_logit, 1)- torch.log_softmax(t_logit_true, 1)), 1)
+    lc = opt.lmda_l2 * l_2 + l_cls + opt.lmda_e * l_e
+    # print(lc.mean(), (lc - lc.mean()).mean())
+    # c = lc.mean()
+    return lc
 
 def kl_div(mu1, mu2, std1, std2):
     kl_1 = -0.5 * torch.sum(1 + std1 - mu1 ** 2 - std1.exp(), dim = 1)
@@ -260,8 +348,15 @@ def kl_div(mu1, mu2, std1, std2):
     # kl = kl.sum(-1)
     return kl_1 + kl_2
 
-def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
+def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
     L = 0
+    if mode == 'joint':
+        model_t, model_s, model = models
+        model_t.eval()
+        model_s.eval()
+    else:
+        model_t, model = models
+        model_t.eval()
     sample_q, sample_q_xy = get_sample_q(opt, x_p.device)
     cache_p_x = None
     cache_p_x_y = None
@@ -287,7 +382,7 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
     # Followed by the idea of jem
 
     if opt.lmda_p_x_y > 0:
-        x_q_lab = sample_q(model, replay_buffer, y=y_lab)
+        x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab, open_clip_grad=0.1)
         # -E_{\theta}, bigger better.
         fp = model(x_lab, y_lab)[0]
         fq = model(x_q_lab, y_lab)[0]
@@ -295,8 +390,6 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         fp = fp.mean()
         fq = fq.mean()
         l_p_x_y  = -(fp-fq)
-        # l_ssm, _ = sliced_VR_score_matching(model, x_lab, y=y_lab)
-        # l_p_x_y += opt.lmda_kl * l_ssm.mean()
         cache_p_x_y = (fp, fq)
         L += opt.lmda_p_x_y * l_p_x_y
         ls.append(l_p_x_y)
@@ -317,6 +410,43 @@ def update_theta(opt, replay_buffer, model, x_p, x_lab, y_lab, model_t=None):
         # l_cls.backward
     # l_cls = -torch.log_softmax(logit, 1).mean() - math.log(opt.n_cls)
     ls.append(l_cls)
+    if mode == 'joint':
+        x_pos = x_lab
+        logit_t_pos = model_t(x_lab)
+        l_b_s = []
+        for sample_at_k in samples[3:8]:
+            x_k, x_k_minus_1, noise = sample_at_k
+            # x_k lc calculation
+            # x_neg = x_k
+            # print(x_k_minus_1.shape)
+            logit_s = model_s(x_k)
+            logit_t = model_t(x_k)
+            # print(logit_s.requires_grad, logit_t.requires_grad)
+            # f_q_k = model(x_neg, y=y_lab, py=opt.y)[0]
+            l_c_k = update_lc_theta(opt, x_k, logit_t, y_lab, logit_s, logit_t_pos) # l_c_k.requires_grad = False
+            # x_{k - 1} lc calculation
+            # x_neg = x_k_minus_1
+            with torch.no_grad():
+                logit_s = model_s(x_k_minus_1)
+                logit_t = model_t(x_k_minus_1)
+                
+                # f_q_k_minus_1 = model(x_neg, y=y_lab, py=opt.y)[0]
+                l_c_k_minus_1 = update_lc_theta(opt, x_k_minus_1, logit_t, y_lab, logit_s, logit_t_pos) # l_c_{k-1}.requires_grad = False
+            # lc target updation
+            # Here p_{\theta} ~ N(x_{k - 1} + \sigma_{k-1}^2 s_{\theta}(x_{k - 1}), \sigma_{k-1}^2)
+            # The mu_{\theta} here using minus operation, to avoid the second calculation of gradient.
+            mu = x_k - noise # mu.requires_grad = True
+            sigma = 0.01 * torch.ones_like(x_k)
+
+            nll = diag_normal_NLL(torch.flatten(x_k, 1), torch.flatten(mu, 1), torch.flatten(sigma, 1)).mean(1)
+            l_b = ((l_c_k_minus_1 - l_c_k) * nll).mean()
+            l_b_s.append(l_b * 20)
+            # print(l_b, (l_c_k_minus_1).mean(), l_c_k.mean())
+            # L += l_b * 100
+        # ls.append(l_b)
+        sum(l_b_s).backward()
+        ls.append(l_c_k.mean())
+        ls.append(l_c_k_minus_1.mean())
     # print(l_cls)
     # L += l_cls
     

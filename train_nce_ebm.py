@@ -22,7 +22,7 @@ from datasets.imagenet import get_imagenet_dataloader, get_dataloader_sample
 from helper.util import adjust_learning_rate, TVLoss
 from helper.util_gen import get_replay_buffer, getDirichl
 
-from helper.loops import train_generator, train_joint
+from helper.loops import train_generator, train_nce_G
 from helper.pretrain import init
 # from helper.util import SampleBuffer
 
@@ -41,11 +41,23 @@ def parse_option():
     parser.add_argument('--data_noise', type=float, default=0.03, help="The adding noise for sampling data point x~p_data.")
 
     # optimization
+    # EBM option
     parser.add_argument('--learning_rate_ebm', type=float, default=0.01, help='learning rate')
     parser.add_argument('--lr_decay_epochs_ebm', type=str, default='150,180,210,250', help='where to decay lr, can be a list')
     parser.add_argument('--lr_decay_rate_ebm', type=float, default=0.3, help='decay rate for learning rate')
     parser.add_argument('--weight_decay_ebm', type=float, default=0.0, help='weight decay')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
+    # VAE option
+    parser.add_argument('--learning_rate_e', type=float, default=0.005, help='learning rate for vae model')
+    parser.add_argument('--weight_decay_e', type=float, default=0.0, help='weight decay for encoder')
+    parser.add_argument('--learning_rate_d', type=float, default=0.005, help='learning rate for vae model')
+    parser.add_argument('--weight_decay_d', type=float, default=0.0, help='weight decay for decoder')
+    parser.add_argument('--scheduler_gamma', type=float, default=0.95, help= 'gamma for lr_scheduler.')
+    parser.add_argument('--reinit_freq', type=str, default=0.05, help='reinitialization frequency.')
+
+    # Generator Details
+    parser.add_argument('--g_steps', type=int, default=100, help='Updating steps for x')
+    parser.add_argument('--g_lr', type=float, default=0.025, help='Start learning rate of update_stpes')
 
     # dataset
     parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100', 'imagenet'], help='dataset')
@@ -54,37 +66,30 @@ def parse_option():
     # parser.add_argument('--save_dir', type=str, default='../save/', help='The directory for saving the generated samples.')
 
     # model
-    parser.add_argument('--model', type=str, default='resnet110',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet20x10','resnet28x10' ])
+    parser.add_argument('--model_vae', type=str, default='cvae',
+                        choices=['vae', 'cvae'])
     parser.add_argument('--model_s', type=str, default='resnet8x4',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10'])
-    parser.add_argument('--model_stu', type=str, default='resnet8x4',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10'])
-    parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10'])
+    parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance', 'spectral'])
     parser.add_argument('--act', type=str, default='relu', choices=['relu', 'leaky', 'swish'])
-    parser.add_argument('--joint', action="store_true", help='Flag for whether adding l_c term when training EBM.')
+    parser.add_argument('--capcitiy', default=10000, type=int, help='Capcity of sample buffer.')
     
     
     parser.add_argument('--path_t', type=str, default=None, help='teacher model snapshot')
 
     parser.add_argument('--energy', default='mcmc', type=str, help='Sampling method to update EBM.')
-    parser.add_argument('--lmda_ebm', default=0.7, type=float, help='Hyperparameter for update EBM.')
-    parser.add_argument('--lmda_l2', default=1.2e-5, type=float, help='Hyperparameter for l2-norm for generated loss')
-    parser.add_argument('--lmda_tv', default=2.5e-3, type=float, help='Hyperparameter for total variation loss.')
-    parser.add_argument('--lmda_p_x', default=1., type=float, help='Hyperparameter for building p(x)')
-    parser.add_argument('--lmda_p_x_y', default=0., type=float, help='Hyperparameter for building p(x,y)')
-    parser.add_argument('--lmda_e', default=1., type=float, help='Hyperparameter for kl divergence of negative student and positive teacher.')
-    parser.add_argument('--g_steps', default=20, type=int, help='Total MCMC steps for generating images.')
+    parser.add_argument('--lmda_v', default=0.01, type=float, help='Hyperparameter for update VAE.')
+    parser.add_argument('--lmda_tv', default=0.25, type=float, help='None')
+    parser.add_argument('--steps', default=20, type=int, help='Total MCMC steps for generating images.')
     parser.add_argument('--step_size', default=1, type=float, help='learning rate of MCMC updation.')
-    parser.add_argument('--capcitiy', default=10000, type=int, help='Capcity of sample buffer.')
     parser.add_argument('--trial', type=str, default='1', help='trial id')
-    parser.add_argument('--reinit_freq', type=str, default=0.05, help='reinitialization frequency.')
     parser.add_argument('--plot_uncond', action="store_true", help="Flag for saving class-conditional samples.")
     parser.add_argument('--plot_cond', action="store_true", help="Flag for saving class-conditional samples")
     parser.add_argument('--load_buffer_path', type=str, default=None, help='If not none, the loading path of replay buffer.')
     parser.add_argument('--n_valid', type=int, default=5000, help='Set validation data.')
     parser.add_argument('--labels_per_class', type=int, default=-1, help='Number of labeled examples per class.')
     parser.add_argument('--cls', type=str, default='cls', choices=['cls', 'mi'])
+    parser.add_argument('--latent_dim', type=int, default=100, help='The dimension of latent vector.')
 
 
     # DDP options
@@ -93,8 +98,8 @@ def parse_option():
     opt = parser.parse_args()
 
     # set different learning rate from these 4 models
-    if opt.model in ['MobileNetV2', 'ShuffleV1', 'ShuffleV2']:
-        opt.learning_rate = 0.01
+    if opt.model_s in ['MobileNetV2', 'ShuffleV1', 'ShuffleV2']:
+        opt.learning_rate_ebm = 0.01
 
     # set the path according to the environment
     if hostname.startswith('visiongpu'):
@@ -110,10 +115,8 @@ def parse_option():
         opt.lr_decay_epochs_ebm.append(int(it))
 
     # opt.model_t = get_teacher_name(opt.path_t)
-    if opt.joint:
-        opt.model_name = '{}_T:{}_S:{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_cls_mode_{}'.format(opt.model_s, opt.model, opt.model_stu, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.cls)
-    else:
-        opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_cls_mode_{}'.format(opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.cls)
+
+    opt.model_name = '{}_{}_lr_{}_decay_{}_lre_{}_gamma_{}_lrd_{}_energy_mode_{}_trial_{}'.format(opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.learning_rate_e, opt.scheduler_gamma, opt.learning_rate_d, opt.energy, opt.trial)
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
     if not os.path.isdir(opt.tb_folder):
@@ -126,23 +129,23 @@ def parse_option():
     return opt
 
 
-def get_teacher_name(model_path):
-    segments = model_path.split('/')[-2].split('_')
-    if segments[0] != 'wrn':
-        return segments[0]
-    else:
-        return segments[0] + '_' + segments[1] + '_' + segments[2]
+# def get_teacher_name(model_path):
+#     segments = model_path.split('/')[-2].split('_')
+#     if segments[0] != 'wrn':
+#         return segments[0]
+#     else:
+#         return segments[0] + '_' + segments[1] + '_' + segments[2]
 
-def load_teacher(model_path, opt):
-    print('=====> loading teacher model.')
-    model_t = get_teacher_name(model_path)
-    model = model_dict[model_t](num_classes=opt.n_cls, norm='batch')
-    if opt.dataset == 'imagenet':
-        model = model_dict[model_t](num_classes=opt.n_cls, pretrained=True)
-    else:
-        model.load_state_dict(torch.load(model_path)['model'])
-    print('===> done.')
-    return model
+# def load_teacher(model_path, opt):
+#     print('=====> loading teacher model.')
+#     model_t = get_teacher_name(model_path)
+#     model = model_dict[model_t](num_classes=opt.n_cls, norm='batch')
+#     if opt.dataset == 'imagenet':
+#         model = model_dict[model_t](num_classes=opt.n_cls, pretrained=True)
+#     else:
+#         model.load_state_dict(torch.load(model_path)['model'])
+#     print('===> done.')
+#     return model
 
 def setup_ranks():
     os.environ['OPM_NUM_THREADS'] = '1'
@@ -159,51 +162,55 @@ def main():
         os.mkdir(opt.save_dir)
     # dataloader
     opt.datafree = False
-    
     if opt.dataset == 'cifar100':
         train_loader, val_loader = get_cifar100_dataloaders(opt, batch_size=opt.batch_size, num_workers=opt.num_workers, use_subdataset=True)
         opt.n_cls = 100
+        img_size = 32
     elif opt.dataset == 'imagenet':
         train_loader, val_loader, n_data = get_imagenet_dataloader(batch_size=opt.batch_size, num_workers=opt.num_workers, is_instance=True, use_subdataset=True)
         opt.n_cls = 1000
+        img_size = 256
     else:
         raise NotImplementedError(opt.dataset)
+    
     # model
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
-    
-    d, w = opt.model_s.split('x')[0][-2:], opt.model_s.split('x')[1]
+    # model = load_teacher(opt.path_t, opt)
 
-    model_score = model_dict[opt.model_s](depth=int(d), widen_factor=int(w), num_classes=opt.n_cls, norm=opt.norm)
-    
-    # model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm)
-    model_score = model_dict['Score'](model=model_score, n_cls=opt.n_cls)
-    
-    buffer, _ = get_replay_buffer(opt, model=model_score)
-    model = load_teacher(opt.path_t, opt)
+    # model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm, use_latent=True, img_size=img_size, latent_dim=100, in_channels=0)
+    # model_score = model_dict['Score'](model=model_score, n_cls=opt.n_cls)
+    model_score = model_dict['Score'](nc=3, nz=opt.latent_dim, nez=opt.n_cls)
+    # model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
+    # model_vae = model_dict[opt.model_vae](num_classes=opt.n_cls, in_channels=3, latent_dim=100, img_size=img_size)
+    encoder = model_dict['enc'](in_channels=3, num_classes=opt.n_cls, latent_dim=opt.latent_dim, img_size=img_size)
+    decoder = model_dict['dec'](in_channels=3, num_classes=opt.n_cls, latent_dim=opt.latent_dim, img_size=img_size)
     # model = model_dict['Score'](model=model, n_cls=opt.n_cls)
     # print(model)
     optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate_ebm, betas=[0.9, 0.999],  weight_decay=opt.weight_decay_ebm)
-    if opt.joint:
-        model_list = [model, model_stu, model_score]
-    else:
-        model_list = [model, model_score]
+    optimizer_e = optim.Adam(encoder.parameters(), lr=opt.learning_rate_e, weight_decay=opt.weight_decay_e)
+    optimizer_d = optim.Adam(decoder.parameters(), lr=opt.learning_rate_d, weight_decay=opt.weight_decay_d)
+    scheduler_e = optim.lr_scheduler.ExponentialLR(optimizer_e, gamma=opt.scheduler_gamma)
+    scheduler_d = optim.lr_scheduler.ExponentialLR(optimizer_d, gamma=opt.scheduler_gamma)
+    model_list = [encoder, decoder, model_score]
+    optimizer_list = [optimizer_e, optimizer_d, optimizer]
+    fixed_noise = torch.FloatTensor(opt.n_cls, opt.latent_dim, 1, 1)
     # optimizer = nn.DataParallel(optimizer)
-    criterion = TVLoss()
+    # criterion = TVLoss()
     if torch.cuda.is_available():
-        model = model.cuda()
+        encoder = encoder.cuda()
+        decoder = decoder.cuda()
         model_score = model_score.cuda()
-        criterion = criterion.cuda()
-        if opt.joint:
-            model_stu = model_stu.cuda()
-        cudnns.benchmark = True
+        # criterion = criterion.cuda()
+        fixed_noise = fixed_noise.cuda()
+        cudnns.benchmark = False
+        cudnns.deterministic = True
 
 
     # tensorboard
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
-    
-    opt.y = getDirichl(opt.path_t)
-    print(opt)
+    buffer, _ = get_replay_buffer(opt, model=model_score)
+    # opt.y = getDirichl(opt.path_t)
     # print(opt.y)
     # routine
     for epoch in range(opt.init_epochs+1, opt.epochs + 1):
@@ -216,33 +223,30 @@ def main():
         print("==> training...")
 
         time1 = time.time()
-        if opt.joint:
-            train_loss = train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
-        else:
-            train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
+        train_loss = train_nce_G(epoch, train_loader, model_list, optimizer_list, opt, logger, buffer, fixed_noise=fixed_noise)
         time2 = time.time()
         logger.log_value('train_loss', train_loss, epoch)
+        scheduler_e.step()
+        scheduler_d.step()
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
         
         # save the best model
-        # print('Saving Sampling Buffer')
-        print('Sample Buffer:')
-        print('length: %d' % (len(buffer)))
+        # print('Saving Sampling Buffer'
         
         if epoch % opt.save_freq == 0:
             print('Writing valid samples')
             ckpt_dict = {
-                "model_state_dict": model_score.state_dict(),
-                "replay_buffer": buffer
+                "ebm_state_dict": model_score.state_dict(),
+                "e_state_dict": encoder.state_dict(),
+                "e_opt_state_dict": optimizer_e.state_dict(),
+                "ebm_opt_state_dict": optimizer.state_dict(),
+                "d_state_dict": decoder.state_dict(),
+                "d_opt_state_dict": optimizer_d.state_dict(),
+                "buffer": buffer
             }
             torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_epoch_{epoch}.pts'.format(epoch=epoch)))
 
 if __name__ == '__main__':
-    import random
-    random.seed(1)
-    torch.manual_seed(1)
-    torch.cuda.manual_seed_all(1)
-    cudnns.benchmark = True
-    cudnns.enabled = True
-    cudnns.deterministic = True
+    torch.manual_seed(1234)
+    torch.cuda.manual_seed(4321)
     main()
