@@ -125,14 +125,16 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
         # input_fake, [mu, logvar] = G(noise, target, return_feat=True)
         # output = model(input_fake)
         loss_ebm = 0
-        optimizer.zero_grad()
-        model.zero_grad()
+        
         if opt.energy == 'mcmc':
             loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model, input, x_lab, y_lab, model_t=model_t)    
         elif opt.energy == 'ssm':
             loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
         else:
             raise NotImplementedError('Not implemented.')
+        optimizer.zero_grad()
+        model.zero_grad()
+        loss_ebm.backward()
         optimizer.step()
         losses.update(loss_ebm, input.size(0))
         batch_time.update(time.time() - end)
