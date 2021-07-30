@@ -75,12 +75,14 @@ def parse_option():
     parser.add_argument('--lmda_p_x_y', default=0., type=float, help='Hyperparameter for building p(x,y)')
     parser.add_argument('--lmda_e', default=1., type=float, help='Hyperparameter for kl divergence of negative student and positive teacher.')
     parser.add_argument('--g_steps', default=20, type=int, help='Total MCMC steps for generating images.')
+    parser.add_argument('--lc_K', default=5, type=int, help='Sample K steps for policy gradient. ')
     parser.add_argument('--step_size', default=1, type=float, help='learning rate of MCMC updation.')
     parser.add_argument('--capcitiy', default=10000, type=int, help='Capcity of sample buffer.')
     parser.add_argument('--trial', type=str, default='1', help='trial id')
     parser.add_argument('--reinit_freq', type=str, default=0.05, help='reinitialization frequency.')
     parser.add_argument('--plot_uncond', action="store_true", help="Flag for saving class-conditional samples.")
     parser.add_argument('--plot_cond', action="store_true", help="Flag for saving class-conditional samples")
+    parser.add_argument('--short_run', action="store_true", help="Whether use short-run MCMC methods to sample.")
     parser.add_argument('--load_buffer_path', type=str, default=None, help='If not none, the loading path of replay buffer.')
     parser.add_argument('--n_valid', type=int, default=5000, help='Set validation data.')
     parser.add_argument('--labels_per_class', type=int, default=-1, help='Number of labeled examples per class.')
@@ -176,10 +178,11 @@ def main():
     model_score = model_dict[opt.model_s](depth=int(d), widen_factor=int(w), num_classes=opt.n_cls, norm=opt.norm)
     
     # model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm)
-    model_score = model_dict['Score'](model=model_score, n_cls=opt.n_cls)
+    model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
     
     buffer, _ = get_replay_buffer(opt, model=model_score)
     model = load_teacher(opt.path_t, opt)
+    model_stu = model_dict[opt.model_stu](num_classes=opt.n_cls, norm='batch')
     # model = model_dict['Score'](model=model, n_cls=opt.n_cls)
     # print(model)
     optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate_ebm, betas=[0.9, 0.999],  weight_decay=opt.weight_decay_ebm)
@@ -196,6 +199,7 @@ def main():
         if opt.joint:
             model_stu = model_stu.cuda()
         cudnns.benchmark = True
+        cudnns.enabled = True
 
 
     # tensorboard

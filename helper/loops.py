@@ -13,7 +13,7 @@ sys.path.append('..')
 from datasets.cifar100 import CIFAR100Gen
  
 from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras, inception_score, TVLoss
-from .util_gen import get_replay_buffer, update_theta, ssm_sample, getDirichl
+from .util_gen import get_replay_buffer, update_theta, getDirichl, shortrun_sample_q
 from .util_gen import get_sample_q, cond_samples, estimate_h, diag_normal_NLL, diag_standard_normal_NLL
 
 
@@ -299,14 +299,16 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
         # input_fake, [mu, logvar] = G(noise, target, return_feat=True)
         # output = model(input_fake)
         loss_ebm = 0
-        optimizer.zero_grad()
-        model.zero_grad()
+        
         if opt.energy == 'mcmc':
             loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model_list, input, x_lab, y_lab, mode='joint')
         elif opt.energy == 'ssm':
             loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
         else:
             raise NotImplementedError('Not implemented.')
+        optimizer.zero_grad()
+        model.zero_grad()
+        loss_ebm.backward()
         optimizer.step()
         losses.update(loss_ebm, input.size(0))
         batch_time.update(time.time() - end)
@@ -394,7 +396,10 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
     plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
 
     end = time.time()
-    sample_q, _ = get_sample_q(opt)
+    if opt.short_run:
+        sample_q = shortrun_sample_q(opt)
+    else:
+        sample_q, _ = get_sample_q(opt)
     correct = 0
     total_length = 0
     for idx, (input, target) in enumerate(train_loader):
@@ -477,12 +482,18 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
             sys.stdout.flush()
             if opt.plot_uncond:
                 y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(input.device)
-                x_q, _ = sample_q(model, buffer, y=y_q)
+                if opt.short_run:
+                    x_q, _ = sample_q(model, y=y)
+                else:
+                    x_q, _ = sample_q(model, buffer, y=y_q)
                 plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q)
             if opt.plot_cond:  # generate class-conditional samples
                 y = torch.arange(0, opt.n_cls).to(input.device)
                 # print(y.shape)
-                x_q_y, _ = sample_q(model, buffer, y=y)
+                if opt.short_run:
+                    x_q_y, _ = sample_q(model, y=y)
+                else:
+                    x_q_y, _ = sample_q(model, buffer, y=y)
                 plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q_y)
 
     return losses.avg
