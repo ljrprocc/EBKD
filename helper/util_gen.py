@@ -254,44 +254,48 @@ def cond_samples(model, replay_buffer, opt, fresh=False, use_buffer=False):
     log_dir = os.path.join(opt.save_folder, 'log.txt')
     f = open(log_dir, 'w')
     
-    for i in tqdm.tqdm(range(n_cls)):
-        if opt.save_grid:
-            plot('{}/samples_label_{}.png'.format(opt.save_dir, i), replay_buffer[i*meta_buffer_size:(i+1)*meta_buffer_size])
-        else:
-            for j in range(meta_buffer_size):
-                global_idx = i*meta_buffer_size+j
-                x = replay_buffer[global_idx].unsqueeze(0).cuda()
-                if use_buffer:
-                    logit = model(x, cls_mode=True)
-                    y = logit.argmax(1)
-                    # print(y)
-                else:
-                    y = torch.LongTensor([i]).cuda()
-                plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, y[0].item()), replay_buffer[global_idx])
-                output = model(replay_buffer[global_idx].unsqueeze(0).cuda())[0].mean()
-                output_xy = model(replay_buffer[global_idx].unsqueeze(0).cuda(), y=y)[0].mean()
-                write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
-                f.write(write_str)
-
-
-    
-    print('Successfully saving the generated result of replay buffer.')
-    f.close()
-        
-
+    # for i in tqdm.tqdm(range(n_cls)):
+    #     if opt.save_grid:
+    #         plot('{}/samples_label_{}.png'.format(opt.save_dir, i), replay_buffer[i*meta_buffer_size:(i+1)*meta_buffer_size])
+    #     else:
+    #         for j in range(meta_buffer_size):
+    #             global_idx = i*meta_buffer_size+j
+    #             x = replay_buffer[global_idx].unsqueeze(0).cuda()
+    #             if use_buffer:
+    #                 logit = model(x, cls_mode=True)
+    #                 y = logit.argmax(1)
+    #                 # print(y)
+    #             else:
+    #                 y = torch.LongTensor([i]).cuda()
+    #             plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, y[0], j), replay_buffer[global_idx])
+    #             output = model(replay_buffer[global_idx].unsqueeze(0).cuda())[0].mean()
+    #             output_xy = model(replay_buffer[global_idx].unsqueeze(0).cuda(), y=y)[0].mean()
+    #             write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
+    #             f.write(write_str)
     # if fresh:
     #     pass
     
-    # n_it = replay_buffer.size(0) // 100
-    # all_y = []
-    # n_cls = opt.n_cls
-    # for i in range(n_it):
-    #     x = replay_buffer[i * 100: (i + 1) * 100].cuda()
-    #     y = model(x, cls_mode=True).max(1)[1]
-    #     all_y.append(y)
+    n_cls = opt.n_cls
+    n_it = replay_buffer.size(0) // 100
+    all_y = []
+    n_cls = opt.n_cls
+    for i in range(n_it):
+        x = replay_buffer[i * 100: (i + 1) * 100].cuda()
+        y = model(x, cls_mode=True).max(1)[1]
+        all_y.append(y)
     
-    # all_y = torch.cat(all_y, 0)
-    # each_class = [replay_buffer[all_y == l] for l in range(n_cls)]
+    all_y = torch.cat(all_y, 0)
+    each_class = [replay_buffer[all_y == l] for l in range(n_cls)]
+    for i in range(n_cls):
+        for j, im in enumerate(each_class[i]):
+            plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), im)
+            output = model(im.unsqueeze(0).cuda())[0].mean()
+            output_xy = model(im.unsqueeze(0).cuda())[0].mean()
+            write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
+            f.write(write_str)
+
+    print('Successfully saving the generated result of replay buffer.')
+    f.close()
     # print([len(c) for c in each_class])
     # for i in range(100):
     #     this_im = []
@@ -344,8 +348,8 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
             x_q, samples = sample_q(model)
         else:
             x_q, samples = sample_q(model, replay_buffer)
-        f_p = model(x_p)[0]
-        f_q = model(x_q)[0]
+        f_p = model(x_p, py=opt.y)[0]
+        f_q = model(x_q, py=opt.y)[0]
         fp = f_p.mean()
         fq = f_q.mean()
         # print(fp, fq)
@@ -364,8 +368,8 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         else:
             x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab, open_clip_grad=0.1)
         # -E_{\theta}, bigger better.
-        fp = model(x_lab, y_lab)[0]
-        fq = model(x_q_lab, y_lab)[0]
+        fp = model(x_lab, y_lab, py=opt.y)[0]
+        fq = model(x_q_lab, y_lab, py=opt.y)[0]
         
         fp = fp.mean()
         fq = fq.mean()
