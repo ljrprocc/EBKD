@@ -87,6 +87,7 @@ def parse_option():
     parser.add_argument('--n_valid', type=int, default=5000, help='Set validation data.')
     parser.add_argument('--labels_per_class', type=int, default=-1, help='Number of labeled examples per class.')
     parser.add_argument('--cls', type=str, default='cls', choices=['cls', 'mi'])
+    parser.add_argument('--use_py', action="store_true", help='flag for using conditional distribution p(x|y) instead of p(x,y).')
 
 
     # DDP options
@@ -206,7 +207,7 @@ def main():
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
     
-    opt.y = getDirichl(opt.path_t)
+    opt.y = getDirichl(opt.path_t) if opt.use_py else None
     print(opt)
     # print(opt.y)
     # routine
