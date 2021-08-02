@@ -48,7 +48,7 @@ def parse_option():
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 
     # dataset
-    parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100', 'imagenet'], help='dataset')
+    parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar10', 'cifar100', 'imagenet'], help='dataset')
 
     # # I/O
     # parser.add_argument('--save_dir', type=str, default='../save/', help='The directory for saving the generated samples.')
@@ -163,9 +163,9 @@ def main():
     # dataloader
     opt.datafree = False
     
-    if opt.dataset == 'cifar100':
+    if opt.dataset == 'cifar100' or opt.dataset == 'cifar10':
         train_loader, val_loader = get_cifar100_dataloaders(opt, batch_size=opt.batch_size, num_workers=opt.num_workers, use_subdataset=True)
-        opt.n_cls = 100
+        opt.n_cls = 100 if opt.dataset == 'cifar100' else 10
     elif opt.dataset == 'imagenet':
         train_loader, val_loader, n_data = get_imagenet_dataloader(batch_size=opt.batch_size, num_workers=opt.num_workers, is_instance=True, use_subdataset=True)
         opt.n_cls = 1000

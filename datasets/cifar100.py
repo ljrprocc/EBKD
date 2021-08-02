@@ -34,7 +34,7 @@ def get_data_folder():
 
     if not os.path.isdir(data_folder):
         os.makedirs(data_folder)
-    test_folder = '/data/lijingru/cifar100/'
+    test_folder = '/data/lijingru/cifar10/'
 
     return data_folder, test_folder
 
@@ -65,6 +65,26 @@ class CIFAR100Gen(Dataset):
     def __len__(self):
         return len(self.files)
 
+class CIFAR10Instance(datasets.CIFAR10):
+    """CIFAR100Instance Dataset.
+    """
+    def __getitem__(self, index):
+        if self.train:
+            img, target = self.data[index], self.targets[index]
+        else:
+            img, target = self.data[index], self.targets[index]
+
+        # doing this so that it is consistent with all other datasets
+        # to return a PIL Image
+        img = Image.fromarray(img)
+
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if self.target_transform is not None:
+            target = self.target_transform(target)
+
+        return img, target, index
 
 class CIFAR100Instance(datasets.CIFAR100):
     """CIFAR100Instance Dataset.
@@ -112,16 +132,28 @@ def get_cifar100_dataloaders(opt, batch_size=128, num_workers=8, is_instance=Fal
     test_transform = transforms.Compose(test_list)
     if not opt.datafree:
         if is_instance:
-            train_set = CIFAR100Instance(root=test_folder,
-                                        download=True,
-                                        train=True,
-                                        transform=train_transform)
+            if opt.dataset == 'cifar100':
+                train_set = CIFAR100Instance(root=test_folder,
+                                            download=True,
+                                            train=True,
+                                            transform=train_transform)
+            else:
+                train_set = CIFAR10Instance(root=test_folder,
+                                            download=True,
+                                            train=True,
+                                            transform=train_transform)
             n_data = len(train_set)
         else:
-            train_set = datasets.CIFAR100(root=test_folder,
-                                        download=True,
-                                        train=True,
-                                        transform=train_transform)
+            if opt.dataset == 'cifar100':
+                train_set = datasets.CIFAR100(root=test_folder,
+                                            download=True,
+                                            train=True,
+                                            transform=train_transform)
+            else:
+                train_set = datasets.CIFAR10(root=test_folder,
+                                            download=True,
+                                            train=True,
+                                            transform=train_transform)
     else:
         train_set = CIFAR100Gen(root=data_folder, transform=train_transform, return_target=True)
         if is_instance:
@@ -130,11 +162,16 @@ def get_cifar100_dataloaders(opt, batch_size=128, num_workers=8, is_instance=Fal
                               batch_size=batch_size,
                               shuffle=True,
                               num_workers=num_workers)
-
-    test_set = datasets.CIFAR100(root=test_folder,
-                                 download=True,
-                                 train=False,
-                                 transform=test_transform)
+    if opt.dataset == 'cifar100':
+        test_set = datasets.CIFAR100(root=test_folder,
+                                    download=True,
+                                    train=False,
+                                    transform=test_transform)
+    else:
+        test_set = datasets.CIFAR10(root=test_folder,
+                                    download=True,
+                                    train=False,
+                                    transform=test_transform)
     test_loader = DataLoader(test_set,
                              batch_size=int(batch_size/2),
                              shuffle=False,
