@@ -247,9 +247,9 @@ def main():
 
 if __name__ == '__main__':
     import random
-    random.seed(1)
-    torch.manual_seed(1)
-    torch.cuda.manual_seed_all(1)
+    random.seed(3)
+    torch.manual_seed(3)
+    torch.cuda.manual_seed_all(3)
     cudnns.benchmark = True
     cudnns.enabled = True
     cudnns.deterministic = True

@@ -20,7 +20,7 @@ std = {
 """
 
 
-def get_data_folder():
+def get_data_folder(opt):
     """
     return server-dependent path to store the data
     """
@@ -34,7 +34,7 @@ def get_data_folder():
 
     if not os.path.isdir(data_folder):
         os.makedirs(data_folder)
-    test_folder = '/data/lijingru/cifar100/'
+    test_folder = '/data/lijingru/' + opt.dataset + '/'
 
     return data_folder, test_folder
 
@@ -112,7 +112,7 @@ def get_cifar100_dataloaders(opt, batch_size=128, num_workers=8, is_instance=Fal
     """
     cifar 100
     """
-    data_folder, test_folder = get_data_folder()
+    data_folder, test_folder = get_data_folder(opt)
     train_list = [
         transforms.Pad(4, padding_mode="reflect"),
         transforms.RandomCrop(32),

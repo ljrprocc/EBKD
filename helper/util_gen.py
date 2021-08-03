@@ -249,7 +249,7 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
 
     return sample_q, sample_q_xy
 
-def cond_samples(model, replay_buffer, opt, fresh=False, use_buffer=False):
+def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=False):
     sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     n_cls = opt.n_cls
@@ -284,7 +284,7 @@ def cond_samples(model, replay_buffer, opt, fresh=False, use_buffer=False):
     all_y = []
     n_cls = opt.n_cls
     for i in range(n_it):
-        x = replay_buffer[i * 100: (i + 1) * 100].cuda()
+        x = replay_buffer[i * 100: (i + 1) * 100].to(device)
         y = model(x, cls_mode=True).max(1)[1]
         all_y.append(y)
     
@@ -293,8 +293,8 @@ def cond_samples(model, replay_buffer, opt, fresh=False, use_buffer=False):
     for i in range(n_cls):
         for j, im in enumerate(each_class[i]):
             plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), im)
-            output = model(im.unsqueeze(0).cuda())[0].mean()
-            output_xy = model(im.unsqueeze(0).cuda())[0].mean()
+            output = model(im.unsqueeze(0).to(device))[0].mean()
+            output_xy = model(im.unsqueeze(0).to(device))[0].mean()
             write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
             f.write(write_str)
 
@@ -370,13 +370,13 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         if opt.short_run:
             x_q_lab, samples = sample_q(model, y=y_lab)
         else:
-            x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab, open_clip_grad=0.1)
+            x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab)
         # -E_{\theta}, bigger better.
-        fp = model(x_lab, y_lab, py=opt.y)[0]
-        fq = model(x_q_lab, y_lab, py=opt.y)[0]
+        fpxys = model(x_lab, y_lab, py=opt.y)[0]
+        fqxys = model(x_q_lab, y_lab, py=opt.y)[0]
         
-        fp = fp.mean()
-        fq = fq.mean()
+        fpxy = fpxys.mean()
+        fqxy = fqxys.mean()
         l_p_x_y  = -(fp-fq)
         cache_p_x_y = (fp, fq)
         L += opt.lmda_p_x_y * l_p_x_y
@@ -453,6 +453,8 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
     # print(l_p_x, l_cls)
     if L.abs().item() > 1e8:
         print('Bad Result.')
+        print(cache_p_x, cache_p_x_y)
+        print(L.item(), l_p_x.item(), l_p_x_y.item())
         raise ValueError('Not converged.')
     # print(L)
     return L, cache_p_x, cache_p_x_y, logit, ls
