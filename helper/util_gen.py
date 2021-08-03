@@ -405,8 +405,10 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         K = opt.lc_K
         # print(K)
         if opt.st == -1:
+            # Randomly sample the start point
             st = random.randint(0, opt.g_steps - K)
         else:
+            # Sample from the given start point.
             st = opt.st
         # print(st)
         # st = 3

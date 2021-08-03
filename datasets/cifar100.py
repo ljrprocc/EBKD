@@ -34,7 +34,7 @@ def get_data_folder():
 
     if not os.path.isdir(data_folder):
         os.makedirs(data_folder)
-    test_folder = '/data/lijingru/cifar10/'
+    test_folder = '/data/lijingru/cifar100/'
 
     return data_folder, test_folder
 
