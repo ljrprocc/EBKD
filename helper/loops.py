@@ -375,9 +375,10 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
 def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger):
     '''One epoch for training generator with teacher'''
     '''One epoch for training generator with teacher'''
-    model_t, model = model_list
+    # model_t, model = model_list
+    model = model_list[0]
     model.train()
-    model_t.eval()
+    # model_t.eval()
     # module_list[0].eval()
     # model = module_list[-1]
     batch_time = AverageMeter()

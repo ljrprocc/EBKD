@@ -88,6 +88,7 @@ def parse_option():
     parser.add_argument('--labels_per_class', type=int, default=-1, help='Number of labeled examples per class.')
     parser.add_argument('--cls', type=str, default='cls', choices=['cls', 'mi'])
     parser.add_argument('--use_py', action="store_true", help='flag for using conditional distribution p(x|y) instead of p(x,y).')
+    parser.add_argument('--st', type=int, default=-1, help="Inital sample step for policy gradient. -1 for random sample.")
 
 
     # DDP options
@@ -191,15 +192,16 @@ def main():
     if opt.joint:
         model_list = [model, model_stu, model_score]
     else:
-        model_list = [model, model_score]
+        model_list = [model_score]
     # optimizer = nn.DataParallel(optimizer)
     criterion = TVLoss()
     if torch.cuda.is_available():
-        model = model.cuda()
+        
         model_score = model_score.cuda()
         criterion = criterion.cuda()
         if opt.joint:
             model_stu = model_stu.cuda()
+            model = model.cuda()
         cudnns.benchmark = True
         cudnns.enabled = True
 

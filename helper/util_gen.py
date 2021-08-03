@@ -92,7 +92,7 @@ def estimate_h(x_lab, y_lab, model_vae, model, mode='ebm', batch_size=128):
 def get_replay_buffer(opt, model=None):
     bs = opt.capcitiy
     nc = 3
-    if opt.dataset == 'cifar100':
+    if opt.dataset == 'cifar100' or opt.dataset == 'cifar10':
         im_size = 32
     else:
         im_size = 224
@@ -155,9 +155,12 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
     if opts.dataset == 'cifar100':
         im_size = 32
         n_cls = 100
-    else:
+    elif opts.dataset == 'imagenet':
         im_size = 224
         n_cls = 1000
+    else:
+        im_size = 32
+        n_cls = 10
     sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     def sample_p_0(replay_buffer, bs, y=None):
@@ -176,6 +179,7 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
         # random_samples = init_random(s)
         choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None, None, None]
         # choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None]
+        # print(random_samples.shape, buffer_samples.shape)
         samples = choose_random * random_samples + (1 - choose_random) * buffer_samples
         return samples.cuda(), inds
 
@@ -330,8 +334,8 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         model_t.eval()
         model_s.eval()
     else:
-        model_t, model = models
-        model_t.eval()
+        model = models[0]
+        # model_t.eval()
     if opt.short_run:
         sample_q = shortrun_sample_q(opt)
     else:
@@ -400,7 +404,10 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         l_b_s = 0.
         K = opt.lc_K
         # print(K)
-        st = random.randint(0, opt.g_steps - K)
+        if opt.st == -1:
+            st = random.randint(0, opt.g_steps - K)
+        else:
+            st = opt.st
         # print(st)
         # st = 3
         # print(len(samples))
