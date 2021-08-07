@@ -290,7 +290,7 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     
     all_y = torch.cat(all_y, 0)
     each_class = [replay_buffer[all_y == l] for l in range(n_cls)]
-    for i in range(n_cls):
+    for i in tqdm.tqdm(range(n_cls)):
         for j, im in enumerate(each_class[i]):
             plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), im)
             output = model(im.unsqueeze(0).to(device))[0].mean()
@@ -377,8 +377,8 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         
         fpxy = fpxys.mean()
         fqxy = fqxys.mean()
-        l_p_x_y  = -(fp-fq)
-        cache_p_x_y = (fp, fq)
+        l_p_x_y  = -(fpxy-fqxy)
+        cache_p_x_y = (fpxy, fqxy)
         L += opt.lmda_p_x_y * l_p_x_y
         ls.append(l_p_x_y)
     else:
