@@ -26,6 +26,7 @@ def adjust_learning_rate_new(epoch, optimizer, LUT):
 
 def adjust_learning_rate(epoch, opt, optimizer):
     """Sets the learning rate to the initial LR decayed by decay rate every steep step"""
+    # print(epoch, np.asarray(opt.lr_decay_epochs_ebm))
     steps = np.sum(epoch > np.asarray(opt.lr_decay_epochs_ebm))
     if steps > 0:
         new_lr = opt.learning_rate_ebm * (opt.lr_decay_rate_ebm ** steps)

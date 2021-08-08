@@ -22,7 +22,7 @@ from helper.util import adjust_learning_rate
 
 from distiller_zoo import DistillKL, HintLoss, Attention
 
-from helper.loops import train_distill, validate, train_distill_G
+from helper.loops import train_distill, validate
 from helper.pretrain import init
 
 def parse_option():

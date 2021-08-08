@@ -92,7 +92,7 @@ def estimate_h(x_lab, y_lab, model_vae, model, mode='ebm', batch_size=128):
 def get_replay_buffer(opt, model=None):
     bs = opt.capcitiy
     nc = 3
-    if opt.dataset == 'cifar100' or opt.dataset == 'cifar10':
+    if opt.dataset == 'cifar100' or opt.dataset == 'cifar10' or opt.dataset == 'svhn':
         im_size = 32
     else:
         im_size = 224

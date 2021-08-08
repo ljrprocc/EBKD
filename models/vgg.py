@@ -22,7 +22,7 @@ model_urls = {
 
 class VGG(nn.Module):
 
-    def __init__(self, cfg, batch_norm=False, num_classes=1000):
+    def __init__(self, cfg, norm='batch', batch_norm=False, num_classes=1000):
         super(VGG, self).__init__()
         self.block0 = self._make_layers(cfg[0], batch_norm, 3)
         self.block1 = self._make_layers(cfg[1], batch_norm, cfg[0][-1])

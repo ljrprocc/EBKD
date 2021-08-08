@@ -30,7 +30,7 @@ def train_vanilla(epoch, train_loader, model, criterion, optimizer, opt):
     end = time.time()
     for idx, data in enumerate(train_loader):
         data_time.update(time.time() - end)
-        if opt.dataset == 'cifar100':
+        if opt.dataset == 'cifar100' or opt.dataset == 'cifar10' or opt.dataset == 'svhn':
             input, target = data
         else:
             input, target, idx = data
@@ -42,7 +42,8 @@ def train_vanilla(epoch, train_loader, model, criterion, optimizer, opt):
 
         # ===================forward=====================
         output = model(input)
-        loss, output = criterion(output, target)
+        # print(output, target)
+        loss = criterion(output, target)
 
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
         losses.update(loss.item(), input.size(0))
