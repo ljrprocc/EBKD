@@ -80,14 +80,11 @@ class SVHNInstance(datasets.SVHN):
     """CIFAR100Instance Dataset.
     """
     def __getitem__(self, index):
-        if self.train:
-            img, target = self.data[index], self.targets[index]
-        else:
-            img, target = self.data[index], self.targets[index]
+        img, target = self.data[index], int(self.labels[index])
 
         # doing this so that it is consistent with all other datasets
         # to return a PIL Image
-        img = Image.fromarray(img)
+        img = Image.fromarray(np.transpose(img, (1,2,0)))
 
         if self.transform is not None:
             img = self.transform(img)

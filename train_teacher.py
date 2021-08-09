@@ -16,6 +16,7 @@ from models import model_dict
 import json
 
 from datasets.cifar100 import get_cifar100_dataloaders
+from datasets.svhn import get_svhn_dataloaders
 from datasets.imagenet import get_imagenet_dataloader, get_dataloader_sample
 from train_student import load_teacher
 from distiller_zoo import EBLoss
@@ -50,7 +51,7 @@ def parse_option():
                                  'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2',
                                  'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19',
                                  'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50' ])
-    parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar10','cifar100', 'imagenet'], help='dataset')
+    parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar10','cifar100', 'imagenet', 'svhn'], help='dataset')
 
     parser.add_argument('-t', '--trial', type=int, default=0, help='the experiment id')
     parser.add_argument('--resume', action='store_true', help='whether to resume from path_t')
@@ -102,6 +103,9 @@ def main():
     elif opt.dataset == 'imagenet':
         train_loader, val_loader, n_data = get_imagenet_dataloader(batch_size=opt.batch_size, num_workers=opt.num_workers, is_instance=True)
         n_cls = 1000
+    elif opt.dataset == 'svhn':
+        train_loader, val_loader = get_svhn_dataloaders(opt, batch_size=opt.batch_size, num_workers=opt.num_workers)
+        n_cls = 10
     else:
         raise NotImplementedError(opt.dataset)
 

@@ -30,10 +30,10 @@ def train_vanilla(epoch, train_loader, model, criterion, optimizer, opt):
     end = time.time()
     for idx, data in enumerate(train_loader):
         data_time.update(time.time() - end)
-        if opt.dataset == 'cifar100' or opt.dataset == 'cifar10' or opt.dataset == 'svhn':
+        if opt.dataset == 'cifar100' or opt.dataset == 'cifar10':
             input, target = data
         else:
-            input, target, idx = data
+            input, target, iddx = data
 
         input = input.float()
         if torch.cuda.is_available():
@@ -404,13 +404,17 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
         sample_q, _ = get_sample_q(opt)
     correct = 0
     total_length = 0
-    for idx, (input, target) in enumerate(train_loader):
+    for idx, data in enumerate(train_loader):
+        # print(len(data))
+        input = data[0]
+        target = data[1]
         if idx <= opt.warmup_iters:
             lr = opt.learning_rate_ebm * idx / float(opt.warmup_iters)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
         data_time.update(time.time() - end)
-        x_lab, y_lab = train_labeled_loader.__next__()
+        nldata = train_labeled_loader.__next__()
+        x_lab, y_lab = nldata[0], nldata[1] 
         x_lab, y_lab = x_lab.cuda(), y_lab.cuda()
 
         input = input.float()
