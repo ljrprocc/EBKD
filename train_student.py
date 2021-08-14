@@ -38,10 +38,10 @@ def parse_option():
     parser.add_argument('--init_epochs', type=int, default=0, help='init training for two-stage methods and resume')
 
     # optimization
-    parser.add_argument('--learning_rate', type=float, default=0.05, help='learning rate')
-    parser.add_argument('--lr_decay_epochs', type=str, default='150,180,210,250', help='where to decay lr, can be a list')
-    parser.add_argument('--lr_decay_rate', type=float, default=0.1, help='decay rate for learning rate')
-    parser.add_argument('--weight_decay', type=float, default=5e-4, help='weight decay')
+    parser.add_argument('--learning_rate_ebm', type=float, default=0.05, help='learning rate')
+    parser.add_argument('--lr_decay_epochs_ebm', type=str, default='150,180,210,250', help='where to decay lr, can be a list')
+    parser.add_argument('--lr_decay_rate_ebm', type=float, default=0.1, help='decay rate for learning rate')
+    parser.add_argument('--weight_decay_ebm', type=float, default=5e-4, help='weight decay')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 
     # dataset
@@ -55,6 +55,7 @@ def parse_option():
                                  'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50', 'ResNet18'])
     parser.add_argument('--path_t', type=str, default=None, help='teacher model snapshot')
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
+    parser.add_argument('--df_folder', type=str, default='/data/lijingru/img_sample_eval_1000/', help='Root folder of generated dataset for KD.')
 
     # distillation
     parser.add_argument('--distill', type=str, default='kd', choices=['kd', 'hint', 'attention', 'similarity', 'correlation', 'vid', 'crd', 'kdsvd', 'fsp', 'rkd', 'pkt', 'abound', 'factor', 'nst', 'energy', 'ebkd'])
@@ -91,20 +92,20 @@ def parse_option():
 
     # set different learning rate from these 4 models
     if opt.model_s in ['MobileNetV2', 'ShuffleV1', 'ShuffleV2']:
-        opt.learning_rate = 0.01
+        opt.learning_rate_ebm = 0.01
 
     # set the path according to the environment
     if hostname.startswith('visiongpu'):
         opt.model_path = '/path/to/my/student_model'
         opt.tb_path = '/path/to/my/student_tensorboards'
     else:
-        opt.model_path = './save/student_model'
-        opt.tb_path = './save/student_tensorboards'
+        opt.model_path = './save/student_datafree_model'
+        opt.tb_path = './save/student_datafree_tensorboards'
 
-    iterations = opt.lr_decay_epochs.split(',')
-    opt.lr_decay_epochs = list([])
+    iterations = opt.lr_decay_epochs_ebm.split(',')
+    opt.lr_decay_epochs_ebm = list([])
     for it in iterations:
-        opt.lr_decay_epochs.append(int(it))
+        opt.lr_decay_epochs_ebm.append(int(it))
 
     opt.model_t = get_teacher_name(opt.path_t)
 
@@ -304,9 +305,9 @@ def main():
 
     # optimizer
     optimizer = optim.SGD(trainable_list.parameters(),
-                          lr=opt.learning_rate,
+                          lr=opt.learning_rate_ebm,
                           momentum=opt.momentum,
-                          weight_decay=opt.weight_decay)
+                          weight_decay=opt.weight_decay_ebm)
     
     optimizer_list.append(optimizer)
 

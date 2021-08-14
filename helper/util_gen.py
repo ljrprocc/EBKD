@@ -291,12 +291,15 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     all_y = torch.cat(all_y, 0)
     each_class = [replay_buffer[all_y == l] for l in range(n_cls)]
     for i in tqdm.tqdm(range(n_cls)):
-        for j, im in enumerate(each_class[i]):
-            plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), im)
-            output = model(im.unsqueeze(0).to(device))[0].mean()
-            output_xy = model(im.unsqueeze(0).to(device))[0].mean()
-            write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
-            f.write(write_str)
+        if opt.save_grid:
+            plot('{}/samples_label_{}.png'.format(opt.save_dir, i), each_class[i])
+        else:
+            for j, im in enumerate(each_class[i]):
+                plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), im)
+                output = model(im.unsqueeze(0).to(device))[0].mean()
+                output_xy = model(im.unsqueeze(0).to(device))[0].mean()
+                write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
+                f.write(write_str)
 
     print('Successfully saving the generated result of replay buffer.')
     f.close()

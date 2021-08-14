@@ -30,7 +30,7 @@ def get_data_folder(opt):
     elif hostname.startswith('yonglong-home'):
         data_folder = '/home/yonglong/Data/data'
     else:
-        data_folder = '/data/lijingru/img_sample_eval_10000/'
+        data_folder = opt.df_folder
 
     if not os.path.isdir(data_folder):
         os.makedirs(data_folder)

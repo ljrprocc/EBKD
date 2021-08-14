@@ -100,7 +100,7 @@ def parse_option():
     # set different learning rate from these 4 models
     if opt.model in ['MobileNetV2', 'ShuffleV1', 'ShuffleV2']:
         opt.learning_rate = 0.01
-
+    opt.df_folder = '/data/lijingru/img_sample_eval_10000/'
     # set the path according to the environment
     if hostname.startswith('visiongpu'):
         opt.model_path = '/path/to/my/student_model'
@@ -116,9 +116,9 @@ def parse_option():
 
     # opt.model_t = get_teacher_name(opt.path_t)
     if opt.joint:
-        opt.model_name = '{}_T:{}_S:{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_cls_mode_{}'.format(opt.model_s, opt.model, opt.model_stu, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.cls)
+        opt.model_name = '{}_T:{}_S:{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_cls_mode_{}_k_{}'.format(opt.model_s, opt.model, opt.model_stu, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.cls, opt.lc_K)
     else:
-        opt.model_name = '{}_{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_cls_mode_{}'.format(opt.dataset, opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.cls)
+        opt.model_name = '{}_{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_cls_mode_{}'.format(opt.dataset, opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.cls, opt.lc_K)
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
     if not os.path.isdir(opt.tb_folder):
@@ -251,9 +251,9 @@ def main():
 
 if __name__ == '__main__':
     import random
-    random.seed(2)
-    torch.manual_seed(2)
-    torch.cuda.manual_seed_all(2)
+    random.seed(5)
+    torch.manual_seed(5)
+    torch.cuda.manual_seed_all(5)
     cudnns.benchmark = True
     cudnns.enabled = True
     cudnns.deterministic = True
