@@ -280,15 +280,16 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
     sample_q, _ = get_sample_q(opt)
     correct = 0
     total_length = 0
-    for idx, (input, target) in enumerate(train_loader):
+    for idx, data in enumerate(train_loader):
         if idx <= opt.warmup_iters:
             lr = opt.learning_rate_ebm * idx / float(opt.warmup_iters)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
         data_time.update(time.time() - end)
-        x_lab, y_lab = train_labeled_loader.__next__()
-        x_lab, y_lab = x_lab.cuda(), y_lab.cuda()
+        nldata = train_labeled_loader.__next__()
+        x_lab, y_lab = nldata[0].cuda(), nldata[1].cuda()
 
+        input, target = data[0], data[1]
         input = input.float()
         # noise = torch.randn(input.shape[0], 100)
         if torch.cuda.is_available():

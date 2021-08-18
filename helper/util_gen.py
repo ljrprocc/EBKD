@@ -180,8 +180,12 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
         choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None, None, None]
         # choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None]
         # print(random_samples.shape, buffer_samples.shape)
+        # print(random_samples.device, buffer_samples.device)
         samples = choose_random * random_samples + (1 - choose_random) * buffer_samples
-        return samples.cuda(), inds
+        if device:
+            return samples.to(device), inds
+        else:
+            return samples.cuda(), inds
 
     def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False, open_clip_grad=None):
         """this func takes in replay_buffer now so we have the option to sample from
@@ -249,6 +253,19 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
 
     return sample_q, sample_q_xy
 
+def freshh(model, opt, device, replay_buffer, save=True):
+    sample_q, _ = get_sample_q(opts=opt, device=device)
+    sqrt = lambda x: int(torch.sqrt(torch.Tensor([x])))
+    plot = lambda p, x: vutils.utils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
+
+    # replay_buffer = torch.FloatTensor(opt.buffer_size, 3, 32, 32).uniform_(-1, 1)
+    for i in tqdm.tqdm(range(opt.n_sample_steps)):
+        samples = sample_q(model, replay_buffer)
+        if i % opt.print_every == 0 and save:
+            plot('{}/samples_{}.png'.format(opt.save_dir, i), samples)
+        # print(i)
+    return replay_buffer
+
 def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=False):
     sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
@@ -257,6 +274,8 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     model.eval()
     log_dir = os.path.join(opt.save_folder, 'log.txt')
     f = open(log_dir, 'w')
+    if fresh:
+        replay_buffer = freshh(model, opt, save=False, device=device, replay_buffer=replay_buffer.cpu())
     
     # for i in tqdm.tqdm(range(n_cls)):
     #     if opt.save_grid:
@@ -282,7 +301,7 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     n_cls = opt.n_cls
     n_it = replay_buffer.size(0) // 100
     all_y = []
-    n_cls = opt.n_cls
+    # n_cls = opt.n_cls
     for i in range(n_it):
         x = replay_buffer[i * 100: (i + 1) * 100].to(device)
         y = model(x, cls_mode=True).max(1)[1]
