@@ -207,7 +207,8 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
             x_k = x_k + now_step_size * f_prime + noise
             # now_step_size *= 0.99
             # print((now_step_size * f_prime + noise).mean())
-            samples.append((x_k.detach(), x_k_pre, noise))
+            if y is not None:
+                samples.append((x_k.detach(), x_k_pre, noise))
             # if open_clip_grad:
             #     torch.nn.utils.clip_grad_norm_(f.parameters(), max_norm=open_clip_grad)
                 # plot('{}/debug_{}.png'.format(opts.save_folder, k))
@@ -226,10 +227,10 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
         # update replay buffer
         if len(replay_buffer) > 0:
             replay_buffer[buffer_inds] = final_samples.cpu()
-        if open_debug:
+        if y is not None:
             return final_samples, samples
         else:
-            return final_samples, samples
+            return final_samples
 
     def sample_q_xy(f, replay_buffer, y=None, n_steps=opts.g_steps):
         f.eval()
@@ -371,9 +372,9 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         # The process of get x_q~p_{\theta}(x), stochastic process of x*=argmin_{x}(E_{\theta}(x))
         # print(replay_buffer.shape, y_q.shape)
         if opt.short_run:
-            x_q, samples = sample_q(model)
+            x_q = sample_q(model)
         else:
-            x_q, samples = sample_q(model, replay_buffer)
+            x_q, samples = sample_q(model, replay_buffer, y=y_q)
         f_p = model(x_p, py=opt.y)[0]
         f_q = model(x_q, py=opt.y)[0]
         fp = f_p.mean()
@@ -383,6 +384,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         L += opt.lmda_p_x * l_p_x
         ls.append(l_p_x)
         cache_p_x = (fp, fq)
+        x_pos, y_pos = x_q, y_q
     else:
         ls.append(0.0)
     # Here use x_labeled and y_labeled, to unifying the label information.
@@ -403,6 +405,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         cache_p_x_y = (fpxy, fqxy)
         L += opt.lmda_p_x_y * l_p_x_y
         ls.append(l_p_x_y)
+        x_pos, y_pos = x_lab, y_lab
     else:
         ls.append(0.0)
 
@@ -421,8 +424,8 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
     # l_cls = -torch.log_softmax(logit, 1).mean() - math.log(opt.n_cls)
     ls.append(l_cls)
     if mode == 'joint':
-        x_pos = x_lab
-        logit_t_pos = model_t(x_lab)
+        # x_pos = x_lab
+        logit_t_pos = model_t(x_pos)
         l_b_s = 0.
         K = opt.lc_K
         # print(K)
@@ -432,6 +435,9 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         else:
             # Sample from the given start point.
             st = opt.st
+
+        # if opt.lmda_p_x > 0 and opt.lmda_p_x_y == 0:
+        #     _, samples = sample_q(model, replay_buffer, y=y_lab)
         # print(st)
         # st = 3
         # print(len(samples))
@@ -444,7 +450,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
             logit_t = model_t(x_k)
             # print(logit_s.requires_grad, logit_t.requires_grad)
             # f_q_k = model(x_neg, y=y_lab, py=opt.y)[0]
-            l_c_k = update_lc_theta(opt, x_k, logit_t, y_lab, logit_s, logit_t_pos) # l_c_k.requires_grad = False
+            l_c_k = update_lc_theta(opt, x_k, logit_t, y_pos, logit_s, logit_t_pos) # l_c_k.requires_grad = False
             # x_{k - 1} lc calculation
             # x_neg = x_k_minus_1
             with torch.no_grad():
@@ -452,7 +458,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
                 logit_t = model_t(x_k_minus_1)
                 
                 # f_q_k_minus_1 = model(x_neg, y=y_lab, py=opt.y)[0]
-                l_c_k_minus_1 = update_lc_theta(opt, x_k_minus_1, logit_t, y_lab, logit_s, logit_t_pos) # l_c_{k-1}.requires_grad = False
+                l_c_k_minus_1 = update_lc_theta(opt, x_k_minus_1, logit_t, y_pos, logit_s, logit_t_pos) # l_c_{k-1}.requires_grad = False
             # lc target updation
             mu = x_k - noise # mu.requires_grad = True
             sigma = 0.01 * torch.ones_like(x_k)
