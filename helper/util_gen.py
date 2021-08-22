@@ -301,6 +301,7 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     
     n_cls = opt.n_cls
     n_it = replay_buffer.size(0) // 100
+    n_range = replay_buffer.size(0) // n_cls
     all_y = []
     # n_cls = opt.n_cls
     for i in range(n_it):
@@ -310,9 +311,13 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     
     all_y = torch.cat(all_y, 0)
     each_class = [replay_buffer[all_y == l] for l in range(n_cls)]
+    imgs = []
     for i in tqdm.tqdm(range(n_cls)):
+        random_seed = torch.randint(0, n_range, (10, ))
+        imgs.append(each_class[random_seed])
         if opt.save_grid:
             plot('{}/samples_label_{}.png'.format(opt.save_dir, i), each_class[i])
+            
         else:
             for j, im in enumerate(each_class[i]):
                 plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), im)
@@ -323,6 +328,11 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
 
     print('Successfully saving the generated result of replay buffer.')
     f.close()
+    imgs = torch.cat(imgs, 0)
+    if opt.dataset != 'cifar100':             
+        plot('{}/sample_10_perclass.png'.format(opt.save_folder), imgs)
+        print('Successfully save the result.')
+
     # print([len(c) for c in each_class])
     # for i in range(100):
     #     this_im = []
