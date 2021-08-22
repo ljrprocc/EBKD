@@ -313,8 +313,10 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     each_class = [replay_buffer[all_y == l] for l in range(n_cls)]
     imgs = []
     for i in tqdm.tqdm(range(n_cls)):
-        random_seed = torch.randint(0, n_range, (10, ))
-        imgs.append(each_class[random_seed])
+        random_seed = torch.randint(0, 100, (10, ))
+        # print(each_class[random_seed].shape)
+        # print()
+        imgs.append(each_class[i][random_seed])
         if opt.save_grid:
             plot('{}/samples_label_{}.png'.format(opt.save_dir, i), each_class[i])
             
