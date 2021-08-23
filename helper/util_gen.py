@@ -312,11 +312,10 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     all_y = torch.cat(all_y, 0)
     each_class = [replay_buffer[all_y == l] for l in range(n_cls)]
     imgs = []
+    # energys =[[] for  _ in range(n_cls)]
     for i in tqdm.tqdm(range(n_cls)):
-        random_seed = torch.randint(0, 100, (10, ))
-        # print(each_class[random_seed].shape)
-        # print()
-        imgs.append(each_class[i][random_seed])
+        energys = []
+        y = torch.LongTensor([i]).to(device)
         if opt.save_grid:
             plot('{}/samples_label_{}.png'.format(opt.save_dir, i), each_class[i])
             
@@ -324,9 +323,15 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
             for j, im in enumerate(each_class[i]):
                 plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), im)
                 output = model(im.unsqueeze(0).to(device))[0].mean()
-                output_xy = model(im.unsqueeze(0).to(device))[0].mean()
+                output_xy = model(im.unsqueeze(0).to(device), y=y)[0].mean()
+                energys.append(output_xy.cpu().item())
                 write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
                 f.write(write_str)
+
+            random_seed = torch.FloatTensor(energys).argsort()[-10:]
+            # print(each_class[random_seed].shape)
+            # print()
+            imgs.append(each_class[i][random_seed])
 
     print('Successfully saving the generated result of replay buffer.')
     f.close()
