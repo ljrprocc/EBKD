@@ -324,7 +324,7 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
                 plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), im)
                 output = model(im.unsqueeze(0).to(device))[0].mean()
                 output_xy = model(im.unsqueeze(0).to(device), y=y)[0].mean()
-                energys.append(output_xy.cpu().item())
+                energys.append((output_xy - output).cpu().item())
                 write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
                 f.write(write_str)
 
