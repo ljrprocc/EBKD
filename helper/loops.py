@@ -303,7 +303,7 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
         loss_ebm = 0
         
         if opt.energy == 'mcmc':
-            loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model_list, input, x_lab, y_lab, mode='joint')
+            loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model_list, input, x_lab, y_lab, mode='joint', y_p=target)
         elif opt.energy == 'ssm':
             loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
         else:
@@ -333,7 +333,7 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
         
 
         # tensorboard logger
-        l_p_x, l_p_x_y, l_cls, l_c, l_c_k_minus_1 = ls
+        l_p_x, l_p_x_y, l_cls, l_c, l_c_k_minus_1, l2_k, l_cls_k, l_e_k, l2_k_1, l_cls_k_1, l_e_k_1 = ls
         acc = torch.sum(torch.argmax(logit, 1) == y_lab).item() / input.size(0)
         accs.update(acc, input.size(0))
         global_iter = epoch * len(train_loader) + idx
@@ -343,6 +343,12 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
             logger.log_value('l_cls', l_cls, global_iter)
             logger.log_value('l_image_c_k', l_c, global_iter)
             logger.log_value('l_image_c_k_1', l_c_k_minus_1, global_iter)
+            logger.log_value('l_2_k', l2_k, global_iter)
+            logger.log_value('l_cls_k', l_cls_k, global_iter)
+            logger.log_value('l_e_k', l_e_k, global_iter)
+            logger.log_value('l_2_k_1', l2_k_1, global_iter)
+            logger.log_value('l_cls_k_1', l_cls_k_1, global_iter)
+            logger.log_value('l_e_k_1', l_e_k_1, global_iter)
             logger.log_value('accuracy', acc, global_iter)
         
         accs.update(acc, input.size(0))
@@ -431,7 +437,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
         loss_ebm = 0
         
         if opt.energy == 'mcmc':
-            loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model_list, input, x_lab, y_lab)    
+            loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model_list, input, x_lab, y_lab, y_p=target)    
         elif opt.energy == 'ssm':
             loss_ebm, score_x, score_xy = ssm_sample(opt, buffer, model, input, x_lab, y_lab)
         else:

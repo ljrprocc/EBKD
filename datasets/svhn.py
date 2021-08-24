@@ -20,7 +20,7 @@ def get_data_folder(opt):
     elif hostname.startswith('yonglong-home'):
         data_folder = '/home/yonglong/Data/data'
     else:
-        data_folder = '/data/lijingru/img_sample_eval_10000/'
+        data_folder = opt.df_folder
 
     if not os.path.isdir(data_folder):
         os.makedirs(data_folder)
@@ -35,6 +35,11 @@ class SVHNGen(Dataset):
         self.transform = transform
         self.target_transform = target_transform
         self.return_target = return_target
+        for x in self.files:
+            ta = x.split('_')[2]
+            if eval(ta) < 0 or eval(ta) >= 10:
+                print(os.path.join(root, x))
+                exit(-1)
     
     def __getitem__(self, idx):
         f = os.path.join(self.root, self.files[idx])

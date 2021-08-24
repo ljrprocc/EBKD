@@ -133,11 +133,8 @@ def get_teacher_name(model_path):
 
 def load_teacher(model_path, n_cls, opt):
     print('=====> loading teacher model.')
-    print('=====> a')
     model_t = get_teacher_name(model_path)
-    print('=====> b')
     model = model_dict[model_t](num_classes=n_cls, norm=opt.norm)
-    print('=====> c')
     if opt.dataset == 'imagenet':
         model = model_dict[model_t](num_classes=n_cls, pretrained=True)
     else:

@@ -11,6 +11,7 @@ import torch.nn.functional as F
 import torch.autograd as autograd
 from torch.distributions.dirichlet import Dirichlet
 import torchvision.utils as vutils
+# from util import set_require_grad
 import cv2
 
 def init_random(s):
@@ -208,7 +209,7 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
             # now_step_size *= 0.99
             # print((now_step_size * f_prime + noise).mean())
             if y is not None:
-                samples.append((x_k.detach(), x_k_pre, noise))
+                samples.append((x_k, x_k_pre, noise))
             # if open_clip_grad:
             #     torch.nn.utils.clip_grad_norm_(f.parameters(), max_norm=open_clip_grad)
                 # plot('{}/debug_{}.png'.format(opts.save_folder, k))
@@ -365,9 +366,9 @@ def update_lc_theta(opt, x_q, t_logit, y_gt, s_logit, t_logit_true):
     lc = opt.lmda_l2 * l_2 + l_cls + opt.lmda_e * l_e
     # print(lc.mean(), (lc - lc.mean()).mean())
     # c = lc.mean()
-    return lc
+    return lc, (l_2, l_cls, l_e)
 
-def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
+def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=None):
     L = 0
     if mode == 'joint':
         model_t, model_s, model = models
@@ -401,7 +402,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         L += opt.lmda_p_x * l_p_x
         ls.append(l_p_x)
         cache_p_x = (fp, fq)
-        x_pos, y_pos = x_q, y_q
+        x_pos, y_pos = x_p, y_q
     else:
         ls.append(0.0)
     # Here use x_labeled and y_labeled, to unifying the label information.
@@ -458,6 +459,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         # print(st)
         # st = 3
         # print(len(samples))
+        # set_requires_gr
         for sample_at_k in samples[st:st+K]:
             x_k, x_k_minus_1, noise = sample_at_k
             # print(x_k.shape, x_k_minus_1.shape, x_k.requires_grad)
@@ -467,7 +469,8 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
             logit_t = model_t(x_k)
             # print(logit_s.requires_grad, logit_t.requires_grad)
             # f_q_k = model(x_neg, y=y_lab, py=opt.y)[0]
-            l_c_k = update_lc_theta(opt, x_k, logit_t, y_pos, logit_s, logit_t_pos) # l_c_k.requires_grad = False
+            l_c_k, cache_l_k = update_lc_theta(opt, x_k, logit_t, y_pos, logit_s, logit_t_pos) # l_c_k.requires_grad = False
+            l2_k, l_cls_k, l_e_k = cache_l_k
             # x_{k - 1} lc calculation
             # x_neg = x_k_minus_1
             with torch.no_grad():
@@ -475,14 +478,15 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
                 logit_t = model_t(x_k_minus_1)
                 
                 # f_q_k_minus_1 = model(x_neg, y=y_lab, py=opt.y)[0]
-                l_c_k_minus_1 = update_lc_theta(opt, x_k_minus_1, logit_t, y_pos, logit_s, logit_t_pos) # l_c_{k-1}.requires_grad = False
+                l_c_k_minus_1, cache_l_k_1 = update_lc_theta(opt, x_k_minus_1, logit_t, y_pos, logit_s, logit_t_pos) # l_c_{k-1}.requires_grad = False
+                l2_k_1, l_cls_k_1, l_e_k_1 = cache_l_k_1
             # lc target updation
             mu = x_k - noise # mu.requires_grad = True
             sigma = 0.01 * torch.ones_like(x_k)
 
-            nll = diag_normal_NLL(torch.flatten(x_k, 1), torch.flatten(mu, 1), torch.flatten(sigma, 1)).mean(1)
+            nll = diag_normal_NLL(torch.flatten(x_k, 1), torch.flatten(mu, 1), 2 * torch.flatten(sigma, 1).log()).mean(1)
             l_b = ((l_c_k_minus_1 - l_c_k) * nll).mean()
-            l_b_s += l_b * 20
+            l_b_s += opt.g_steps / opt.lc_K * l_b 
             # print(l_b, (l_c_k_minus_1).mean(), l_c_k.mean())
             # L += l_b * 100
         # ls.append(l_b)
@@ -491,6 +495,13 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep'):
         L += l_b_s
         ls.append(l_c_k.mean())
         ls.append(l_c_k_minus_1.mean())
+        ls.append(l2_k.mean())
+        ls.append(l_cls_k.mean())
+        ls.append(l_e_k.mean())
+        ls.append(l2_k_1.mean())
+        ls.append(l_cls_k_1.mean())
+        ls.append(l_e_k_1.mean())
+
     # print(l_cls)
     # L += l_cls
     
