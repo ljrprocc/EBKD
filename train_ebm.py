@@ -70,11 +70,11 @@ def parse_option():
 
     parser.add_argument('--energy', default='mcmc', type=str, help='Sampling method to update EBM.')
     parser.add_argument('--lmda_ebm', default=0.7, type=float, help='Hyperparameter for update EBM.')
-    parser.add_argument('--lmda_l2', default=1.2e-5, type=float, help='Hyperparameter for l2-norm for generated loss')
+    parser.add_argument('--lmda_l2', default=0.01, type=float, help='Hyperparameter for l2-norm for generated loss')
     parser.add_argument('--lmda_tv', default=2.5e-3, type=float, help='Hyperparameter for total variation loss.')
     parser.add_argument('--lmda_p_x', default=1., type=float, help='Hyperparameter for building p(x)')
     parser.add_argument('--lmda_p_x_y', default=0., type=float, help='Hyperparameter for building p(x,y)')
-    parser.add_argument('--lmda_e', default=1., type=float, help='Hyperparameter for kl divergence of negative student and positive teacher.')
+    parser.add_argument('--lmda_e', default=0.1, type=float, help='Hyperparameter for kl divergence of negative student and positive teacher.')
     parser.add_argument('--g_steps', default=20, type=int, help='Total MCMC steps for generating images.')
     parser.add_argument('--lc_K', default=5, type=int, help='Sample K steps for policy gradient. ')
     parser.add_argument('--step_size', default=1, type=float, help='learning rate of MCMC updation.')

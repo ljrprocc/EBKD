@@ -363,7 +363,7 @@ def update_lc_theta(opt, x_q, t_logit, y_gt, s_logit, t_logit_true):
     # print(l_cls.shape, l_2.shape, l_tv.shape)
     # KL(p_t(y|x) || p_s(y|x))
     l_e = torch.sum(torch.softmax(t_logit, 1) * (torch.log_softmax(s_logit, 1)- torch.log_softmax(t_logit_true, 1)), 1)
-    lc = opt.lmda_l2 * l_2 + l_cls + opt.lmda_e * l_e
+    lc = opt.lmda_l2 * l_2 + 0.1*l_cls + opt.lmda_e * l_e
     # print(lc.mean(), (lc - lc.mean()).mean())
     # c = lc.mean()
     return lc, (l_2, l_cls, l_e)
