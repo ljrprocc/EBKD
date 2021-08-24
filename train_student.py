@@ -17,6 +17,7 @@ from models.util import Connector, Translator, Paraphraser
 
 from datasets.cifar100 import get_cifar100_dataloaders, get_cifar100_dataloaders_sample
 from datasets.imagenet import get_imagenet_dataloader, get_dataloader_sample
+from datasets.svhn import get_svhn_dataloaders, get_svhn_dataloaders_sample
 
 from helper.util import adjust_learning_rate
 
@@ -45,7 +46,7 @@ def parse_option():
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 
     # dataset
-    parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100', 'imagenet'], help='dataset')
+    parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100', 'imagenet', 'cifar10', 'svhn'], help='dataset')
 
     # model
     parser.add_argument('--model_s', type=str, default='resnet8',
@@ -132,8 +133,11 @@ def get_teacher_name(model_path):
 
 def load_teacher(model_path, n_cls, opt):
     print('=====> loading teacher model.')
+    print('=====> a')
     model_t = get_teacher_name(model_path)
+    print('=====> b')
     model = model_dict[model_t](num_classes=n_cls, norm=opt.norm)
+    print('=====> c')
     if opt.dataset == 'imagenet':
         model = model_dict[model_t](num_classes=n_cls, pretrained=True)
     else:
@@ -157,19 +161,17 @@ def main():
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
 
     # Loading data, supporting CIFAR100 and ImageNet
-    if opt.dataset == 'cifar100':
+    if opt.dataset == 'cifar100' or opt.dataset == 'cifar10':
         if opt.distill in ['crd']:
-            train_loader, val_loader, n_data = get_cifar100_dataloaders_sample(batch_size=opt.batch_size,
-                                                                               num_workers=opt.num_workers,
-                                                                               k=opt.nce_k,
-                                                                               mode=opt.mode)
-        else:
-            train_loader, val_loader, n_data = get_cifar100_dataloaders(opt=opt, batch_size=opt.batch_size, num_workers=opt.num_workers, is_instance=True)
-        n_cls = 100
-
+            train_loader, val_loader, n_data = get_cifar100_dataloaders_sample(batch_size=opt.batch_size, num_workers=opt.num_workers, k=opt.nce_k, mode=opt.mode)
+        train_loader, val_loader = get_cifar100_dataloaders(opt, batch_size=opt.batch_size, num_workers=opt.num_workers)
+        n_cls = 100 if opt.dataset == 'cifar100' else 10
     elif opt.dataset == 'imagenet':
         train_loader, val_loader, n_data = get_imagenet_dataloader(batch_size=opt.batch_size, num_workers=opt.num_workers, is_instance=True)
         n_cls = 1000
+    elif opt.dataset == 'svhn':
+        train_loader, val_loader = get_svhn_dataloaders(opt, batch_size=opt.batch_size, num_workers=opt.num_workers)
+        n_cls = 10
     else:
         raise NotImplementedError(opt.dataset)
 
