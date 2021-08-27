@@ -49,7 +49,7 @@ def parse_option():
     # Generator Details
 
     # dataset
-    parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100', 'imagenet'], help='dataset')
+    parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100', 'imagenet', 'cifar10', 'svhn'], help='dataset')
 
     # # I/O
     # parser.add_argument('--save_dir', type=str, default='../save/', help='The directory for saving the generated samples.')
@@ -110,6 +110,8 @@ def parse_option():
 
     if opt.dataset == 'cifar100':
         opt.n_cls = 100
+    elif opt.dataset == 'cifar10' or opt.dataset == 'svhn':
+        opt.n_cls = 10
     else:
         opt.n_cls = 1000
     return opt
