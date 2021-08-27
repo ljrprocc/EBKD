@@ -47,7 +47,6 @@ def parse_option():
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 
     # Generator Details
-    parser.add_argument('--g_steps', type=int, default=100, help='Updating steps for x')
 
     # dataset
     parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar100', 'imagenet'], help='dataset')
@@ -57,7 +56,7 @@ def parse_option():
 
     # model
     parser.add_argument('--model_s', type=str, default='resnet8x4',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50' ])
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet28x10'])
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
     
     
@@ -69,18 +68,22 @@ def parse_option():
     parser.add_argument('--lmda_tv', default=2.5e-3, type=float, help='Hyperparameter for total variation loss.')
     parser.add_argument('--lmda_p_x', default=1., type=float, help='Hyperparameter for building p(x)')
     parser.add_argument('--lmda_p_x_y', default=0., type=float, help='Hyperparameter for building p(x,y)')
-    parser.add_argument('--steps', default=20, type=int, help='Total MCMC steps for generating images.')
+    parser.add_argument('--g_steps', default=40, type=int, help='Total MCMC steps for generating images.')
     parser.add_argument('--step_size', default=1, type=float, help='learning rate of MCMC updation.')
-    parser.add_argument('--capcitiy', default=10000, type=int, help='Capcity of sample buffer.')
+    parser.add_argument('--buffer_size', default=10000, type=int, help='Capcity of sample buffer.')
     parser.add_argument('--trial', type=str, default='1', help='trial id')
     parser.add_argument('--reinit_freq', type=str, default=0.05, help='reinitialization frequency.')
+    parser.add_argument('--print_every', type=int, default=20, help='reinitialization frequency.')
     parser.add_argument('--plot_uncond', action="store_true", help="Flag for saving class-conditional samples.")
     parser.add_argument('--plot_cond', action="store_true", help="Flag for saving class-conditional samples")
     parser.add_argument('--load_buffer_path', type=str, default=None, help='If not none, the loading path of replay buffer.')
     parser.add_argument('--n_valid', type=int, default=5000, help='Set validation data.')
     parser.add_argument('--labels_per_class', type=int, default=-1, help='Number of labeled examples per class.')
     parser.add_argument('--save_grid', action="store_true", help="Flag for saving the generated results.")
+    parser.add_argument('--open_debug', action="store_true", help="Flag for saving the generated results.")
     parser.add_argument('--jem_cls', action="store_true", help="Flag for whether evaluate the classification result.")
+    parser.add_argument('--fresh', action="store_true", help="Flag for whether evaluate the classification result.")
+    parser.add_argument('--n_sample_steps', type=int, default=1000, help='Flag for refreshing the replay buffer.')
 
     opt = parser.parse_args()
 
@@ -95,7 +98,7 @@ def parse_option():
 
     # opt.model_t = get_teacher_name(opt.path_t)
 
-    opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size{}_lpx_{}_lpxy_{}_energy_mode_{}_trial_{}'.format(opt.model_s, opt.dataset, opt.learning_rate, opt.weight_decay, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.trial)
+    opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size{}_lpx_{}_lpxy_{}_energy_mode_{}_trial_{}'.format(opt.model_s, opt.dataset, opt.learning_rate, opt.weight_decay, opt.buffer_size, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.trial)
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
     if not os.path.isdir(opt.tb_folder):
@@ -124,8 +127,12 @@ def main():
     # dataloader
     # model
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
-    model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm)
-    model_score = model_dict['Score'](model=model_score, n_cls=opt.n_cls)
+    d, w = opt.model_s.split('x')[0][-2:], opt.model_s.split('x')[1]
+    if opt.model_s == 'resnet28x10':
+        model_score = model_dict[opt.model_s](depth=int(d), widen_factor=int(w), num_classes=opt.n_cls, norm=opt.norm)
+    else:
+        model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm)
+    model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
     # model = model_dict['Score'](model=model, n_cls=opt.n_cls)
     # print(model)
     # optimizer = nn.DataParallel(optimizer)
@@ -133,13 +140,19 @@ def main():
     if torch.cuda.is_available():
         model_score = model_score.cuda()
         cudnns.benchmark = True
+    
+    opt.device = next(model_score.parameters()).device
 
     # tensorboard
     # logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
     buffer, model = get_replay_buffer(opt, model=model_score)
-    validate_G(model, buffer, opt)
-
+    buffer = validate_G(model, buffer, opt)
+    ckpt_dict = {
+                "model_state_dict": model_score.state_dict(),
+                "replay_buffer": buffer
+    }
+    torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_buffer.pts'))
 
     # routine
 if __name__ == '__main__':

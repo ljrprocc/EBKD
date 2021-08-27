@@ -91,13 +91,14 @@ def estimate_h(x_lab, y_lab, model_vae, model, mode='ebm', batch_size=128):
     return -loss_theta.mean(), log_probs_ebm_pos, log_probs_ebm_neg, results, next_mode
 
 def get_replay_buffer(opt, model=None):
-    bs = opt.capcitiy
+    
     nc = 3
     if opt.dataset == 'cifar100' or opt.dataset == 'cifar10' or opt.dataset == 'svhn':
         im_size = 32
     else:
         im_size = 224
     if not opt.load_buffer_path:
+        bs = opt.capcitiy
         # replay_buffer = init_random((bs, opt.latent_dim))
         replay_buffer = init_random((bs, nc, im_size, im_size))
     else:
@@ -218,12 +219,7 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
             
             
         f.train()
-        # exit(-1)
-        # idx = random.randint(1, n_steps - 1)
-        # sample_at_k = samples[idx]
-        # print(idx, n_steps)
-        # sample_at_k = x_k, init_sample, noise
-        # print((x_k - init_sample).mean())
+        
         final_samples = x_k.detach()
         # update replay buffer
         if len(replay_buffer) > 0:
@@ -255,16 +251,18 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
 
     return sample_q, sample_q_xy
 
-def freshh(model, opt, device, replay_buffer, save=True):
+def freshh(model, opt, device, replay_buffer=None, save=True):
     sample_q, _ = get_sample_q(opts=opt, device=device)
     sqrt = lambda x: int(torch.sqrt(torch.Tensor([x])))
-    plot = lambda p, x: vutils.utils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
+    plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
 
-    # replay_buffer = torch.FloatTensor(opt.buffer_size, 3, 32, 32).uniform_(-1, 1)
+    replay_buffer = torch.FloatTensor(opt.buffer_size, 3, 32, 32).uniform_(-1, 1)
+    print(replay_buffer.shape)
+    y = torch.arange(0, opt.n_cls).to(device)
     for i in tqdm.tqdm(range(opt.n_sample_steps)):
-        samples = sample_q(model, replay_buffer)
+        samples, _ = sample_q(model, replay_buffer, y=y)
         if i % opt.print_every == 0 and save:
-            plot('{}/samples_{}.png'.format(opt.save_dir, i), samples)
+            plot('{}/samples_{}.png'.format(opt.save_folder, i), samples)
         # print(i)
     return replay_buffer
 
@@ -272,37 +270,17 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     n_cls = opt.n_cls
-    meta_buffer_size = replay_buffer.size(0) // n_cls
+    meta_buffer_size = opt.buffer_size // n_cls
     model.eval()
     log_dir = os.path.join(opt.save_folder, 'log.txt')
     f = open(log_dir, 'w')
     if fresh:
-        replay_buffer = freshh(model, opt, save=False, device=device, replay_buffer=replay_buffer.cpu())
+        replay_buffer = freshh(model, opt, save=opt.open_debug, device=device)
     
-    # for i in tqdm.tqdm(range(n_cls)):
-    #     if opt.save_grid:
-    #         plot('{}/samples_label_{}.png'.format(opt.save_dir, i), replay_buffer[i*meta_buffer_size:(i+1)*meta_buffer_size])
-    #     else:
-    #         for j in range(meta_buffer_size):
-    #             global_idx = i*meta_buffer_size+j
-    #             x = replay_buffer[global_idx].unsqueeze(0).cuda()
-    #             if use_buffer:
-    #                 logit = model(x, cls_mode=True)
-    #                 y = logit.argmax(1)
-    #                 # print(y)
-    #             else:
-    #                 y = torch.LongTensor([i]).cuda()
-    #             plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, y[0], j), replay_buffer[global_idx])
-    #             output = model(replay_buffer[global_idx].unsqueeze(0).cuda())[0].mean()
-    #             output_xy = model(replay_buffer[global_idx].unsqueeze(0).cuda(), y=y)[0].mean()
-    #             write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
-    #             f.write(write_str)
-    # if fresh:
-    #     pass
     
     n_cls = opt.n_cls
-    n_it = replay_buffer.size(0) // 100
-    n_range = replay_buffer.size(0) // n_cls
+    n_it = opt.buffer_size // 100
+    n_range = opt.buffer_size // n_cls
     all_y = []
     # n_cls = opt.n_cls
     for i in range(n_it):
@@ -340,6 +318,8 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     if opt.dataset != 'cifar100':             
         plot('{}/sample_10_perclass.png'.format(opt.save_folder), imgs)
         print('Successfully save the result.')
+
+    return replay_buffer
 
     # print([len(c) for c in each_class])
     # for i in range(100):

@@ -735,17 +735,17 @@ def validate(val_loader, model, criterion, opt):
 
 def validate_G(model, replay_buffer, opt, eval_loader=None):
     """validation for generation stage. Also returns inception score(IS), Fischer Inception Distance(FID). Designed for further inference."""
-    cond_samples(model, replay_buffer, opt)
+    replay_buffer = cond_samples(model, replay_buffer, device=opt.device, opt=opt, fresh=opt.fresh)
     if not opt.save_grid:
         test_folder = opt.save_dir
         dataset = CIFAR100Gen(
             root=test_folder,
             transform=T.Compose([
                 T.ToTensor(),
-                T.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+                T.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
             ])
         )
-        mean, var = inception_score(dataset, resize=True)
+        mean, var = inception_score(dataset, resize=True, device=opt.device, splits=5)
         print(mean, var)
-    if opt.jem_cls:
-        model.eval()
+    
+    return replay_buffer
