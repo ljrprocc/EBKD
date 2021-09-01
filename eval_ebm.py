@@ -148,8 +148,8 @@ def main():
     # tensorboard
     # logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
-    buffer, model = get_replay_buffer(opt, model=model_score)
-    buffer = validate_G(model, buffer, opt)
+    buffer, model_score = get_replay_buffer(opt, model=model_score)
+    buffer = validate_G(model_score, buffer, opt)
     ckpt_dict = {
                 "model_state_dict": model_score.state_dict(),
                 "replay_buffer": buffer
