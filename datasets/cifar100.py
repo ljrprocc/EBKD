@@ -48,22 +48,23 @@ class CIFAR100Gen(Dataset):
     
     def __getitem__(self, idx):
         f = os.path.join(self.root, self.files[idx])
-        target = int(self.files[idx].split('_')[2])
+        
 
         img = Image.open(f)
         if self.transform is not None:
             img = self.transform(img)
         
-        if self.target_transform is not None:
-            target = self.target_transform(target)
-        
         if self.return_target:
+            target = int(self.files[idx].split('_')[2])
+            if self.target_transform is not None:
+                target = self.target_transform(target)
             return img, target, idx
         else:
             return img
     
     def __len__(self):
         return len(self.files)
+
 
 class CIFAR10Instance(datasets.CIFAR10):
     """CIFAR100Instance Dataset.

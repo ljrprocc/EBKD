@@ -263,6 +263,11 @@ def freshh(model, opt, device, replay_buffer=None, save=True):
         samples, _ = sample_q(model, replay_buffer, y=y)
         if i % opt.print_every == 0 and save:
             plot('{}/samples_{}.png'.format(opt.save_folder, i), samples)
+            ckpt_dict = {
+                "model_state_dict": model.state_dict(),
+                "replay_buffer": replay_buffer
+            }
+            torch.save(ckpt_dict, os.path.join(opt.save_ckpt, 'res_buffer_{}.pts'.format(i)))
         # print(i)
     return replay_buffer
 
@@ -284,8 +289,9 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     all_y = []
     # n_cls = opt.n_cls
     for i in range(n_it):
-        x = replay_buffer[i * 100: (i + 1) * 100].to(device)
+        x = replay_buffer[i * 100: (i + 1) * 100].to(device) 
         y = model(x, cls_mode=True).max(1)[1]
+        # y = torch.LongTensor([i] * 100).to(device)
         all_y.append(y)
     
     all_y = torch.cat(all_y, 0)

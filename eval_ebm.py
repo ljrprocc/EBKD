@@ -119,13 +119,17 @@ def parse_option():
 def main():
     opt = parse_option()
     strs = 'img_sample_eval/'
+    ckpts = 'img_ckpts/'
     if opt.save_grid:
         strs = strs[:-1] + '_grid/'
 
     opt.save_dir = os.path.join(opt.save_folder, strs)
+    opt.save_ckpt = os.path.join(opt.save_folder, ckpts)
     print(opt.save_dir)
     if not os.path.exists(opt.save_dir):
         os.mkdir(opt.save_dir)
+    if not os.path.exists(opt.save_ckpt):
+        os.mkdir(opt.save_ckpt)
     # dataloader
     # model
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
@@ -148,8 +152,8 @@ def main():
     # tensorboard
     # logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
-    buffer, model = get_replay_buffer(opt, model=model_score)
-    buffer = validate_G(model, buffer, opt)
+    buffer, model_score = get_replay_buffer(opt, model=model_score)
+    buffer = validate_G(model_score, buffer, opt)
     ckpt_dict = {
                 "model_state_dict": model_score.state_dict(),
                 "replay_buffer": buffer

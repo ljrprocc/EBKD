@@ -3,6 +3,7 @@ from __future__ import print_function, division
 import sys
 import time
 import torch
+import os
 import torch.optim as optim
 from torch.autograd import grad
 import torch.nn.functional as F
@@ -747,5 +748,8 @@ def validate_G(model, replay_buffer, opt, eval_loader=None):
         )
         mean, var = inception_score(dataset, resize=True, device=opt.device, splits=5)
         print(mean, var)
+        f = open(os.path.join(opt.save_folder, 'is.txt'), 'w')
+        f.write('{:.4f} +- {:.4f}'.format(mean, var))
+        f.close()
     
     return replay_buffer
