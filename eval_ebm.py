@@ -84,6 +84,8 @@ def parse_option():
     parser.add_argument('--jem_cls', action="store_true", help="Flag for whether evaluate the classification result.")
     parser.add_argument('--fresh', action="store_true", help="Flag for whether evaluate the classification result.")
     parser.add_argument('--n_sample_steps', type=int, default=1000, help='Flag for refreshing the replay buffer.')
+    parser.add_argument('--resume', type=str, default='none')
+    parser.add_argument('--init_epoch', type=int, default=0)
 
     opt = parser.parse_args()
 

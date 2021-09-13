@@ -259,7 +259,10 @@ def freshh(model, opt, device, replay_buffer=None, save=True):
     replay_buffer = torch.FloatTensor(opt.buffer_size, 3, 32, 32).uniform_(-1, 1)
     print(replay_buffer.shape)
     y = torch.arange(0, opt.n_cls).to(device)
-    for i in tqdm.tqdm(range(opt.n_sample_steps)):
+    if opt.resume != 'none':
+        ckpt = torch.load(opt.resume)
+        replay_buffer = ckpt['replay_buffer']
+    for i in tqdm.tqdm( range(opt.init_epoch,opt.n_sample_steps)):
         samples, _ = sample_q(model, replay_buffer, y=y)
         # if i == 0:
         #     ckpt_dict = {
@@ -329,10 +332,11 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
 
     print('Successfully saving the generated result of replay buffer.')
     f.close()
-    imgs = torch.cat(imgs, 0)
-    if opt.dataset != 'cifar100':             
-        plot('{}/sample_10_perclass.png'.format(opt.save_folder), imgs)
-        print('Successfully save the result.')
+    if not opt.save_grid:
+        imgs = torch.cat(imgs, 0)
+        if opt.dataset != 'cifar100':             
+            plot('{}/sample_10_perclass.png'.format(opt.save_folder), imgs)
+            print('Successfully save the result.')
 
     return replay_buffer
 
