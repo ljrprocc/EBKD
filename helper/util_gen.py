@@ -261,6 +261,12 @@ def freshh(model, opt, device, replay_buffer=None, save=True):
     y = torch.arange(0, opt.n_cls).to(device)
     for i in tqdm.tqdm(range(opt.n_sample_steps)):
         samples, _ = sample_q(model, replay_buffer, y=y)
+        # if i == 0:
+        #     ckpt_dict = {
+        #         "model_state_dict": model.state_dict(),
+        #         "replay_buffer": replay_buffer
+        #     }
+        #     torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_buffer_0.pts'))
         if i % opt.print_every == 0 and save:
             plot('{}/samples_{}.png'.format(opt.save_folder, i), samples)
             ckpt_dict = {
@@ -306,10 +312,13 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
             
         else:
             for j, im in enumerate(each_class[i]):
-                plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), im)
                 output = model(im.unsqueeze(0).to(device))[0].mean()
                 output_xy = model(im.unsqueeze(0).to(device), y=y)[0].mean()
+                # if output < -10 and output_xy < -10:
+                #     continue
+                plot('{}/samples_label_{}_{}.png'.format(opt.save_dir, i, j), im)
                 energys.append((output_xy - output).cpu().item())
+                
                 write_str = 'samples_label_{}_{}\tf(x):{:.4f}\tf(x,y):{:.4f}\n'.format(i, j, output, output_xy)
                 f.write(write_str)
 
