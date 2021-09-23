@@ -14,8 +14,8 @@ sys.path.append('..')
 from datasets.cifar100 import CIFAR100Gen
  
 from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras, inception_score, TVLoss
-from .util_gen import get_replay_buffer, update_theta, getDirichl, shortrun_sample_q
-from .util_gen import get_sample_q, cond_samples, estimate_h, diag_normal_NLL, diag_standard_normal_NLL
+from .util_gen import get_replay_buffer, update_theta, getDirichl 
+from .util_gen import get_sample_q, cond_samples, diag_normal_NLL, diag_standard_normal_NLL
 
 
 def train_vanilla(epoch, train_loader, model, criterion, optimizer, opt):
@@ -80,180 +80,6 @@ def train_vanilla(epoch, train_loader, model, criterion, optimizer, opt):
 
     return top1.avg, losses.avg
 
-def train_nce_G(epoch, train_loader, model_list, optimizer_list, opt, logger, buffer, fixed_noise=None):
-    encoder, decoder, model = model_list
-    opt_phi, opt_alpha, opt_theta = optimizer_list
-    model.train()
-    encoder.train()
-    decoder.train()
-    batch_time = AverageMeter()
-    data_time = AverageMeter()
-    losses_log = AverageMeter()
-    losses_phi = AverageMeter()
-    losses_alpha = AverageMeter()
-    kl_losses = AverageMeter()
-    recon_losses = AverageMeter()
-    fpxys = AverageMeter()
-    fqxys = AverageMeter()
-    elbo = AverageMeter()
-    accs = AverageMeter()
-    # noise = torch.randn(128, 3, 32, 32)
-    train_loader, train_labeled_loader = train_loader
-    fixed_noiseV = torch.autograd.Variable(fixed_noise)
-    # criterion is tv loss
-    plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
-
-    end = time.time()
-    correct = 0
-    total_length = 0
-    d = 0
-    N_train_sets = len(train_loader.dataset)
-    next_mode = 'ebm'
-    sample_q, _ = get_sample_q(opt, l=100)
-    for idx, (input, target) in enumerate(train_loader):
-        data_time.update(time.time() - end)
-        global_iter = epoch * len(train_loader) + idx
-        x_lab, y_lab = train_labeled_loader.__next__()
-        x_lab, y_lab = x_lab.cuda(), y_lab.cuda()
-        # print(next_mode)
-
-        input = input.float()
-        # noise = torch.randn(input.shape[0], 100)
-        if torch.cuda.is_available():
-            input = input.cuda()
-            target = target.cuda()
-        
-        set_require_grad(encoder, True)
-        set_require_grad(decoder, False)
-        set_require_grad(model, False)
-        for i in range(5):
-            '''
-            Encoder update.
-            min_{\phi} E_{z~e(z|x)}[log(p_{\theta}/(p_{\theta}+q_{\alpha}))]
-            '''
-            opt_phi.zero_grad()
-            z, mu, log_var, _ = encoder(x_lab, labels=y_lab)
-            z = z.reshape(z.size(0), z.size(1), 1, 1)
-            e_pos = model(x=x_lab, z=z).squeeze()
-            # print(e_pos.shape)
-            e_pos = torch.gather(e_pos, 1, y_lab[:, None])
-            standard_normal = torch.distributions.Normal(torch.zeros_like(z.squeeze()), torch.ones_like(z.squeeze()))
-            # q_z = torch.distributions.Normal(mu, (log_var / 2).exp())
-            # print(mu.mean(), log_var.mean())
-            # print(z)
-            # print(mu.mean(), log_var.mean())
-            z = z.squeeze()
-            ll_neg = -diag_standard_normal_NLL(z).mean(1)
-            # ll_neg = standard_normal.log_prob(z).mean(1)
-            # print(z.shape, log_var.shape, mu.shape)
-            # log_q_z = q_z.log_prob(z).mean(1)
-            log_q_z = -diag_normal_NLL(z, mu, log_var).mean(1)
-            kl_div = (log_q_z - ll_neg).mean()
-            x_rec = decoder(z, y=y_lab)
-            errRecon = torch.nn.functional.mse_loss(x_rec, x_lab)
-            loss_phi = (errRecon + kl_div) - (e_pos + log_q_z).mean()
-            # print(e_pos.shape, ll_neg.shape)
-            # prob1 = torch.sigmoid(e_pos  - ll_neg).log().mean()
-            # kl div
-            # kl_div = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
-            kl_losses.update(kl_div.item(), input.size(0))
-            # loss_phi = prob1 + 0.01 * kl_div
-            # print(prob1.item(), kl_div.item())
-            losses_phi.update(loss_phi.item(), input.size(0))
-            loss_phi.backward()
-            opt_phi.step()
-            if idx % opt.print_freq == 0:
-                string = 'Epoch: [{0}][{1}/{2}]\tStep: [Encoder]\tTime {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tLoss Encoder {loss_phi.val:.4f} ({loss_phi.avg:.4f})\tKL div {loss_kl.val:.4f}({loss_kl.avg:.4f})'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss_phi=losses_phi, loss_kl=kl_losses)
-                print(string)
-                sys.stdout.flush()
-
-        set_require_grad(encoder, False)
-        set_require_grad(decoder, False)
-        set_require_grad(model, True)
-        for i in range(4):
-            '''
-            EBM update.
-            max_{\phi} E_{z~e(z|x)}[] + E_{z~q_{\alpha}}[]
-            '''
-            opt_theta.zero_grad()
-            z, _, _, y = encoder(x_lab, labels=y_lab)
-            z = z.reshape(z.size(0), z.size(1), 1, 1)
-            e_pos = model(x=x_lab, z=z.detach()).squeeze()
-            e_pos = torch.gather(e_pos, 1, y_lab[:, None])
-            # ll_pos = standard_normal.log_prob(z.detach()).mean(1)
-            # prob1 = torch.sigmoid(e_pos - ll_pos).log().mean()
-            # z_neg = torch.randn_like(z).reshape(z.shape)
-            x_neg, z_neg = decoder.sample(num_samples=opt.batch_size, current_device=input.device, y=y_lab)
-            z_neg = z_neg.reshape(z_neg.size(0), z_neg.size(1), 1, 1)
-            e_neg = model(x=x_neg.detach(), z=z_neg).squeeze()
-            e_neg = torch.gather(e_neg, 1, y_lab[:, None])
-            loss_theta = (e_pos - e_neg).mean()
-            # ll_neg = standard_normal.log_prob(z_neg).mean(1)
-            # print(z.mean().item(), z_neg.mean().item())
-            # print(ll_neg.mean())
-            # prob2 = (1 - torch.sigmoid(e_neg - ll_neg)).log().mean()
-            # loss_theta = -(prob1 + prob2)
-            # print(prob1.mean().item(), prob2.mean().item())
-            losses_log.update(loss_theta.item(), input.size(0))
-            loss_theta.backward()
-            opt_theta.step()
-            if idx % opt.print_freq == 0:
-                string = 'Epoch: [{0}][{1}/{2}]\tStep: [EBM]\tTime {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tLoss CD {loss_log.val:.4f} ({loss_log.avg:.4f})\t'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss_log=losses_log)
-                print(string)
-                sys.stdout.flush()
-        
-        set_require_grad(encoder, False)
-        set_require_grad(decoder, True)
-        set_require_grad(model, False)
-        for i in range(5):
-            '''
-            Decoder update.
-            min_{\alpha} E_{z~q(z|x)}[p_{\alpha}(x|z)]
-            can add some regularization terms, or tv items.
-            '''
-            opt_alpha.zero_grad()
-            z, _, _, _ = encoder(x_lab, labels=y_lab)
-            x_rec = decoder(z.detach(), y=y_lab)
-            loss_rec = torch.nn.functional.mse_loss(x_lab, x_rec)
-            
-            x_neg, z_neg = decoder.sample(num_samples=opt.batch_size, current_device=input.device, y=y_lab)
-            z_neg = z_neg.reshape(z_neg.size(0), z_neg.size(1), 1, 1)
-            e_neg = model(x=x_neg, z=z_neg).squeeze()
-            e_neg = torch.gather(e_neg, 1, y_lab[:, None])
-
-            
-            loss_alpha = loss_rec + e_neg.mean()
-            losses_alpha.update(loss_alpha, input.size(0))
-            recon_losses.update(loss_rec, input.size(0))
-            loss_alpha.backward()
-            opt_alpha.step()
-            if idx % opt.print_freq == 0:
-                string = 'Epoch: [{0}][{1}/{2}]\tStep: [Decoder]\tTime {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tRec Loss {loss_rec.val:.4f} ({loss_rec.avg:.4f})\tLoss Alpha {loss_alpha.val:.4f} ({loss_alpha.avg:.4f})'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss_rec=recon_losses, loss_alpha=losses_alpha)
-                print(string)
-                sys.stdout.flush()
-        
-        # Sampling process.
-        
-        if opt.plot_uncond:
-            y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(input.device)
-            z_q_y = sample_q(model, buffer, y=y_q)
-            with torch.no_grad():
-                x_q_y = decoder(z_q_y, y=y_q)
-            if idx % opt.print_freq == 0:
-                plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q)
-        if opt.plot_cond:  # generate class-conditional samples
-            y = torch.arange(0, opt.n_cls).to(input.device)
-            # print(y.shape)
-            # print(buffer)
-            # z_q_y = sample_q(model, buffer, y=y)
-            # z_q_y = torch.randn(opt.n_cls, opt.latent_dim).to(input.device)
-            with torch.no_grad():
-                x_q_y = decoder(fixed_noiseV.squeeze(), y=y)
-            # print(x_q_y.mean())
-            if idx % opt.print_freq == 0:
-                plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q_y)
-    return losses_log.avg
-
 def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger):
     '''One epoch for training generator with teacher'''
     model_t, model_s, model = model_list
@@ -278,7 +104,7 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
     plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
 
     end = time.time()
-    sample_q, _ = get_sample_q(opt)
+    sample_q = get_sample_q(opt)
     correct = 0
     total_length = 0
     for idx, data in enumerate(train_loader):

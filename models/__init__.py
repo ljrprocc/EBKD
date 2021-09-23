@@ -9,7 +9,7 @@ from .vgg import vgg19_bn, vgg16_bn, vgg13_bn, vgg11_bn, vgg8_bn
 from .mobilenetv2 import mobile_half
 from .ShuffleNetv1 import ShuffleV1
 from .ShuffleNetv2 import ShuffleV2
-from .generator import CCF, FF, ZNEnergy, netE
+from .generator import CCF
 from .cvae import ConditionalVAE, VanillaVAE, CVAEEncoder, CVAEDecoder
 
 model_dict = {
@@ -42,7 +42,7 @@ model_dict = {
     'MobileNetV2': mobile_half,
     'ShuffleV1': ShuffleV1,
     'ShuffleV2': ShuffleV2,
-    'Score': netE,
+    # 'Score': netE,
     'Gen': CCF,
     'vae': VanillaVAE,
     'cvae': ConditionalVAE,

@@ -33,63 +33,6 @@ def diag_standard_normal_NLL(z):
     nll = 0.5 * (z * z)
     return nll.squeeze()
 
-def estimate_h(x_lab, y_lab, model_vae, model, mode='ebm', batch_size=128):
-    results = model_vae(x_lab, labels=y_lab)
-    x_rec, mu, log_var, z = results[0], results[2], results[3], results[4]
-    if mode == 'ebm':
-        mu = mu.detach()
-        log_var = log_var.detach()
-        z = z.detach()
-    # print(mu, log_var)
-    
-    dist = torch.distributions.Normal(mu, (log_var / 2).exp())
-    dist_neg = torch.distributions.Normal(torch.zeros_like(z), torch.ones_like(z))
-    logqz = dist.log_prob(z).mean(1)
-
-    logqxgivenz = -torch.mean((x_rec - x_lab) ** 2, (1,2,3))
-    log_probs_noise_pos = logqz + logqxgivenz
-    
-    # print(z, mu)
-    x_neg, z_neg, logqxgivenz_neg = model_vae.sample(num_samples=batch_size, current_device=0, labels=y_lab, train=True)
-    if mode == 'ebm':
-        z_neg = z_neg.detach()
-        x_neg = x_neg.detach()
-    logqz_neg = dist_neg.log_prob(z_neg).mean(1)
-    # print(x_neg.requires_grad, x_neg_rec.requires_grad, mode)
-    
-    # logqz
-    log_probs_noise_neg = logqz_neg
-
-    # print(mu_neg.shape, log_var_neg.shape, mu.shape, log_var.shape)
-    # print(log_var.mean().item(), log_var_neg.mean().item())
-    
-    # dist_neg = torch.distributions.Normal(mu_neg, (log_var_neg/2).exp() / 2)
-    # log_probs_noise_neg = dist.log_prob(z_neg).mean(1)
-    # print(model.c)
-    log_probs_ebm_pos = model(x=x_lab, y=y_lab, z=z)[0]
-    log_probs_ebm_neg = model(x=x_neg, y=y_lab, z=z_neg)[0]
-    
-    logit_ebm = torch.cat([log_probs_ebm_pos, log_probs_ebm_neg], 1)
-    if mode == 'vae':
-        logit_ebm = logit_ebm.detach()
-    logit_noise = torch.cat([log_probs_noise_pos.unsqueeze(1), log_probs_noise_neg.unsqueeze(1)], 1)
-    logit_true = logit_ebm - logit_noise
-    label = torch.zeros_like(logit_ebm)
-    label[:, 0] = 1
-    loss_theta = torch.nn.BCEWithLogitsLoss(reduction='none')(logit_true, label).sum(1)
-    
-    h_pos = torch.sigmoid(log_probs_ebm_pos.squeeze() - log_probs_noise_pos)
-    h_neg = torch.sigmoid(log_probs_ebm_neg.squeeze() - log_probs_noise_neg)
-    # print((h_pos > 0.5).shape)
-    # print(( log_probs_noise_pos).mean().item(), (log_probs_noise_neg).mean().item())
-    acc = ((h_pos > 0.5).sum() + (h_neg < 0.5).sum()) / (len(x_lab) + len(x_neg))
-    if acc >= 0.5:
-        next_mode = 'vae'
-    else:
-        next_mode = 'ebm'
-
-    return -loss_theta.mean(), log_probs_ebm_pos, log_probs_ebm_neg, results, next_mode
-
 def get_replay_buffer(opt, model=None):
     
     nc = 3
@@ -116,40 +59,7 @@ def getDirichl(net_path, scale=1, sim_scale=1):
     c_n = c_n * scale + 0.000001
     diri = Dirichlet(c_n)
     X = diri.rsample()
-    return X.mean(0)
-
-def shortrun_sample_q(opts):
-    nc = 3
-    if opts.dataset == 'cifar100':
-        im_size = 32
-        n_cls = 100
-    else:
-        im_size = 224
-        n_cls = 1000
-    
-    def get_sample_p0(bs):
-        return init_random((bs, nc, im_size, im_size)).cuda()
-
-    def sample_q(f, y=None, n_steps=opts.g_steps):
-        f.eval()
-        bs = opts.batch_size if y is None else y.size(0)
-        init_sample = get_sample_p0(bs)
-        x_k = torch.autograd.Variable(init_sample, requires_grad=True)
-        # sgld
-        samples = []
-        now_step_size = opts.step_size
-        x_k_pre = init_sample
-        for k in range(n_steps):
-            f_prime = torch.autograd.grad(f(x_k, y=y)[0].sum(), [x_k], retain_graph=True)[0]
-            noise = 0.01 * torch.randn_like(x_k)
-            x_k.data += now_step_size * f_prime + noise
-            samples.append((x_k.detach(), x_k_pre, noise))
-            x_k_pre = x_k.detach()           
-        f.train()
-        final_samples = x_k.detach()
-        return final_samples, samples
-    return sample_q
-        
+    return X.mean(0)       
 
 def get_sample_q(opts, device=None, open_debug=False, l=None):
     # bs = opt.capcitiy
@@ -229,27 +139,7 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
         else:
             return final_samples
 
-    def sample_q_xy(f, replay_buffer, y=None, n_steps=opts.g_steps):
-        f.eval()
-        bs = opts.batch_size if y is None else y.size(0)
-        init_sample, buffer_inds = sample_p_0(replay_buffer, bs=bs, y=y)
-        x_k = torch.autograd.Variable(init_sample, requires_grad=True)
-
-        now_step_size = opts.step_size
-        for k in range(n_steps):
-            f_prime = torch.autograd.grad(f(x_k, cls_mode=True).sum(0), [x_k], grad_outputs=torch.ones_like(opt.n_cls))
-            print(f_prime.shape)
-            x_k.data += now_step_size * f_prime + 0.01 * torch.randn_like(x_k)
-            now_step_size *= 0.99
-        
-        f.train()
-        final_samples = x_k.detach()
-
-        if len(replay_buffer) > 0:
-            replay_buffer[buffer_inds] = final_samples.cpu()
-        return final_samples
-
-    return sample_q, sample_q_xy
+    return sample_q
 
 def freshh(model, opt, device, replay_buffer=None, save=True):
     sample_q, _ = get_sample_q(opts=opt, device=device)
@@ -376,10 +266,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
     else:
         model = models[0]
         # model_t.eval()
-    if opt.short_run:
-        sample_q = shortrun_sample_q(opt)
-    else:
-        sample_q, sample_q_xy = get_sample_q(opt, x_p.device)
+    sample_q = get_sample_q(opt, x_p.device)
     cache_p_x = None
     cache_p_x_y = None
     ls = []
@@ -388,10 +275,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
         y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(x_p.device)
         # The process of get x_q~p_{\theta}(x), stochastic process of x*=argmin_{x}(E_{\theta}(x))
         # print(replay_buffer.shape, y_q.shape)
-        if opt.short_run:
-            x_q = sample_q(model)
-        else:
-            x_q, samples = sample_q(model, replay_buffer, y=y_q)
+        x_q, samples = sample_q(model, replay_buffer, y=y_q)
         f_p = model(x_p, py=opt.y)[0]
         f_q = model(x_q, py=opt.y)[0]
         fp = f_p.mean()
@@ -408,10 +292,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
     # Followed by the idea of jem
 
     if opt.lmda_p_x_y > 0:
-        if opt.short_run:
-            x_q_lab, samples = sample_q(model, y=y_lab)
-        else:
-            x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab)
+        x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab)
         # -E_{\theta}, bigger better.
         fpxys = model(x_lab, y_lab, py=opt.y)[0]
         fqxys = model(x_q_lab, y_lab, py=opt.y)[0]
@@ -427,17 +308,11 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
         ls.append(0.0)
 
     # P(y | x). Here needs the update of x.
-    
-    if opt.cls == 'cls':
-        # print(len(logit))
-        logit = model(x_lab, cls_mode=True)
-        l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
-        L += l_cls
-    else:
-        logit = model(x_q_lab, cls_mode=True)
-        l_cls = -torch.gather(torch.log_softmax(logit, 1), 1, y_lab[:, None]).mean() - math.log(opt.n_cls)
-        L += l_cls
-        # l_cls.backward
+    # print(len(logit))
+    logit = model(x_lab, cls_mode=True)
+    l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
+    L += l_cls
+    # l_cls.backward
     # l_cls = -torch.log_softmax(logit, 1).mean() - math.log(opt.n_cls)
     ls.append(l_cls)
     if mode == 'joint':
@@ -452,26 +327,14 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
         else:
             # Sample from the given start point.
             st = opt.st
-
-        # if opt.lmda_p_x > 0 and opt.lmda_p_x_y == 0:
-        #     _, samples = sample_q(model, replay_buffer, y=y_lab)
-        # print(st)
-        # st = 3
-        # print(len(samples))
-        # set_requires_gr
         for sample_at_k in samples[st:st+K]:
             x_k, x_k_minus_1, noise = sample_at_k
-            # print(x_k.shape, x_k_minus_1.shape, x_k.requires_grad)
-            # x_k lc calculation
-            # with torch.no_grad():
             logit_s = model_s(x_k)
             logit_t = model_t(x_k)
-            # print(logit_s.requires_grad, logit_t.requires_grad)
-            # f_q_k = model(x_neg, y=y_lab, py=opt.y)[0]
             l_c_k, cache_l_k = update_lc_theta(opt, x_k, logit_t, y_pos, logit_s, logit_t_pos) # l_c_k.requires_grad = False
             l2_k, l_cls_k, l_e_k = cache_l_k
-            # x_{k - 1} lc calculation
-            # x_neg = x_k_minus_1
+            # print(x_k_minus_1.requires_grad, x_k.requires_grad, noise.requires_grad)
+            # exit(-1)
             with torch.no_grad():
                 logit_s = model_s(x_k_minus_1)
                 logit_t = model_t(x_k_minus_1)
@@ -483,7 +346,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
             mu = x_k - noise # mu.requires_grad = True
             sigma = 0.01 * torch.ones_like(x_k)
 
-            nll = diag_normal_NLL(torch.flatten(x_k, 1), torch.flatten(mu, 1), 2 * torch.flatten(sigma, 1).log()).mean(1)
+            nll = diag_normal_NLL(torch.flatten(x_k, 1), torch.flatten(mu, 1), 2*torch.flatten(sigma, 1).log()).mean(1)
             l_b = ((l_c_k_minus_1 - l_c_k) * nll).mean()
             l_b_s += opt.g_steps / opt.lc_K * l_b 
             # print(l_b, (l_c_k_minus_1).mean(), l_c_k.mean())
@@ -523,151 +386,6 @@ def create_similarity(netT_path, scale=1):
     weight_normed = weight / torch.norm(weight, dim=1).unsqueeze(-1)
     # print(weight_normed)
     return torch.matmul(weight_normed, weight_normed.T) / scale
-
-def update_x(model, neg_img, opt, y=None, global_iters=0):
-    n_cls = model.n_cls
-    criterion_cls = torch.nn.CrossEntropyLoss()
-    optim_X = optim.Adam([neg_img], lr=opt.g_lr, betas=[0.5, 0.99], eps=1e-8)
-
-    with torch.autograd.set_detect_anomaly(True):
-        for i in range(opt.g_steps):
-            logit_out, neg_out = model(neg_img, return_logit=True)
-            if i == opt.g_steps - 1:
-                loss_out = neg_out.sum()
-                grad_now = autograd.grad(loss_out, [neg_img], retain_graph=True, only_inputs=True)[0]
-            optim_X.zero_grad()
-            model.zero_grad()
-            loss_cls = criterion_cls(logit_out, y)
-            loss_tv = get_image_prior_losses(neg_img)
-            loss_l2 = neg_img.view(neg_img.shape[0], -1).norm(1).mean()
-            loss_aux = loss_cls + opt.lmda_tv * loss_tv + opt.lmda_l2 * loss_l2
-            loss_aux.backward()
-            optim_X.step()
-            global_iters += 1
-    return neg_img.detach(), grad_now, global_iters
-
-
-
-def SGLD_autograd(model, neg_img, opt, y=None, global_iters=None):
-    n_cls = model.n_cls
-    criterion_cls = torch.nn.CrossEntropyLoss()
-    # optimizer for update of X
-    optim_X = optim.Adam([neg_img], lr=0.05, betas=[0.5, 0.999], eps=1e-8)
-    for _ in range(opt.steps):
-        # noise = torch.randn_like(neg_img).to(neg_img.device)
-        logit_out, neg_out = model(neg_img, return_logit=True)
-        optim_X.zero_grad()
-        model.zero_grad()
-        loss_cls = criterion_cls(logit_out, y)
-        loss_tv = get_image_prior_losses(neg_img)
-        loss_l2 = neg_img.view(neg_img.shape[0], -1).norm(1).mean()
-        loss_aux = loss_cls + opt.lmda_tv * loss_tv + opt.lmda_l2 * loss_l2
-        # print(loss_aux)
-        loss_aux.backward()
-        optim_X.step()
-        global_iters += 1
-    
-    set_require_grad(model, True)
-    model.train()
-    return neg_img.detach(), global_iters
-
-
-def SGLD(model, neg_img, opt, y=None):
-    # neg_img.requires_grad = True
-    # print(neg_img)
-    for _ in range(opt.steps):
-        noise = torch.randn_like(neg_img).to(neg_img.device)
-        logit_out, neg_out = model(neg_img, return_logit=True)
-        loss_out = neg_out.sum()
-        # print(loss_tv, loss_l2, loss_out)
-        # print(neg_out)
-        # print(neg_out.mean())
-        grad_x = autograd.grad(loss_out, [neg_img], retain_graph=True)[0]
-        
-        # print(loss_out)
-        neg_img.data = neg_img.data - opt.step_size * grad_x + 0.01 * noise
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
-        # neg_img.clamp_(-1, 1)
-    # print('****************')
-    set_require_grad(model, True)
-    model.train()
-    # print(neg_img.shape)
-    # neg_img.clamp_(-1, 1)
-    return neg_img.detach()
-
-def clip_grad(parameters, optimizer):
-    with torch.no_grad():
-        for group in optimizer.param_groups:
-            for p in group['params']:
-                state = optimizer.state[p]
-
-                if 'step' not in state or state['step'] < 1:
-                    continue
-
-                step = state['step']
-                exp_avg_sq = state['exp_avg_sq']
-                _, beta2 = group['betas']
-
-                bound = 3 * torch.sqrt(exp_avg_sq / (1 - beta2 ** step)) + 0.1
-                p.grad.data.copy_(torch.max(torch.min(p.grad.data, bound), -bound))
-
-class SampleBuffer:
-    def __init__(self, max_samples=10000, net_T=None):
-        self.max_samples = max_samples
-        self.buffer = []
-        sim_mat = create_similarity(net_T, 1)
-        self.sim_mat = sim_mat
-
-    def __len__(self):
-        return len(self.buffer)
-
-    def push(self, samples, class_ids=None, global_iters=None):
-        samples = samples.detach().to('cpu')
-        class_ids = class_ids.detach().to('cpu')
-        global_iters = global_iters.detach().to('cpu')
-
-        for sample, class_id, global_iter in zip(samples, class_ids, global_iters):
-            self.buffer.append((sample.detach(), class_id, global_iter))
-
-            if len(self.buffer) > self.max_samples:
-                self.buffer.pop(0)
-
-    def get(self, n_samples, device='cuda'):
-        items = random.choices(self.buffer, k=n_samples)
-        samples, class_ids, global_iters = zip(*items)
-        samples = torch.stack(samples, 0)
-        class_ids = torch.tensor(class_ids)
-        global_iters = torch.tensor(global_iters)
-        # class_ids = torch.stack(class_ids, 0)
-        samples = samples.to(device)
-        class_ids = class_ids.to(device)
-        global_iters = global_iters.to(device)
-
-        return samples, class_ids, global_iters
-
-
-def sample_buffer(buffer, y, batch_size=128, p=0.95, device='cuda', num_classes=100):
-    
-    if len(buffer) < 1:
-        return (
-            init_random(batch_size, 3, 32, 32).to(device),
-            torch.randint(0, num_classes, (batch_size,)).to(device),
-            torch.zeros(batch_size).to(device)
-            # y,
-        )
-
-    n_replay = (np.random.rand(batch_size) < p).sum()
-
-    replay_sample, replay_id, global_iters = buffer.get(n_replay)
-    random_sample = init_random(batch_size - n_replay, 3, 32, 32).to(device)
-    random_id = torch.randint(0, num_classes, (batch_size - n_replay,)).to(device)
-    random_global_iter = torch.zeros((batch_size - n_replay, )).to(device)
-
-    return (
-        torch.cat([replay_sample, random_sample], 0),
-        torch.cat([replay_id, random_id], 0),
-        torch.cat([global_iters, random_global_iter], 0)
-    )
 
 def NT_XentLoss(z1, z2, temperature=0.5):
     '''
