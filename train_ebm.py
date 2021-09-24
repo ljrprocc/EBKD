@@ -58,7 +58,7 @@ def parse_option():
     parser.add_argument('--model', type=str, default='resnet110',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet20x10','resnet28x10' ])
     parser.add_argument('--model_s', type=str, default='resnet8x4',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10', 'Energy'])
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10', 'Energy', 'wrn_28_10'])
     parser.add_argument('--model_stu', type=str, default='resnet8x4',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10'])
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
@@ -90,11 +90,11 @@ def parse_option():
     parser.add_argument('--use_py', action="store_true", help='flag for using conditional distribution p(x|y) instead of p(x,y).')
     parser.add_argument('--st', type=int, default=-1, help="Inital sample step for policy gradient. -1 for random sample.")
     # model options
-    parser.add_argument('--alias', action="store_true")
+    # parser.add_argument('--alias', action="store_true")
     parser.add_argument('--self_attn', action="store_true")
-    parser.add_argument('--square_energy', action="store_true")
-    parser.add_argument('--sigmoid', action="store_true")
-    parser.add_argument('--multiscale', action="store_true")
+    # parser.add_argument('--square_energy', action="store_true")
+    # parser.add_argument('--sigmoid', action="store_true")
+    # parser.add_argument('--multiscale', action="store_true")
 
 
 

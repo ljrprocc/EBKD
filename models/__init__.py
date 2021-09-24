@@ -35,6 +35,7 @@ model_dict = {
     'wrn_16_2': wrn_16_2,
     'wrn_40_1': wrn_40_1,
     'wrn_40_2': wrn_40_2,
+    'wrn_28_10': wrn_28_10,
     'vgg8': vgg8_bn,
     'vgg11': vgg11_bn,
     'vgg13': vgg13_bn,

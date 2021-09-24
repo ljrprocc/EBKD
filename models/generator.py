@@ -75,6 +75,9 @@ class CCF(FF):
         #print(cls_mode, is_feat, preact, y)
         
         feats, logits = super().classify(x, is_feat=True)
+        if torch.isnan(logits).any():
+            # print(self.f)
+            exit(-1)
         
         # feat = feats[-1]
         if py is not None:

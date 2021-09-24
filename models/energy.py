@@ -477,6 +477,7 @@ class ResNetModel(nn.Module):
 
         x5 = x.view(x.size(0), -1)
         energy = self.fc(x)
+        # print(energy)
 
         if self.args.square_energy:
             energy = torch.pow(energy, 2)
