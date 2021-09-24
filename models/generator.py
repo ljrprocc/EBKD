@@ -47,12 +47,12 @@ class FF(nn.Module):
 
     def classify(self, x, is_feat=False, preact=False):
         if is_feat:
-            feats, penult_z = self.f(x, is_feat=is_feat, preact=preact)
+            feats, penult_z = self.f(x, is_feat=is_feat)
             # print(penult_z.requires_grad)
             # print(self.f(x, is_feat=is_feat, preact=preact))
             return feats, penult_z
         else:
-            penult_z = self.f(x, is_feat=is_feat, preact=preact)
+            penult_z = self.f(x, is_feat=is_feat)
             return penult_z
     
     def forward(self, x):
@@ -74,7 +74,7 @@ class CCF(FF):
     def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False, py=None):
         #print(cls_mode, is_feat, preact, y)
         
-        feats, logits = super().classify(x, is_feat=True, preact=preact)
+        feats, logits = super().classify(x, is_feat=True)
         
         # feat = feats[-1]
         if py is not None:

@@ -58,7 +58,7 @@ def parse_option():
     parser.add_argument('--model', type=str, default='resnet110',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet20x10','resnet28x10' ])
     parser.add_argument('--model_s', type=str, default='resnet8x4',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10'])
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10', 'Energy'])
     parser.add_argument('--model_stu', type=str, default='resnet8x4',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10'])
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance'])
@@ -89,12 +89,22 @@ def parse_option():
     parser.add_argument('--cls', type=str, default='cls', choices=['cls', 'mi'])
     parser.add_argument('--use_py', action="store_true", help='flag for using conditional distribution p(x|y) instead of p(x,y).')
     parser.add_argument('--st', type=int, default=-1, help="Inital sample step for policy gradient. -1 for random sample.")
+    # model options
+    parser.add_argument('--alias', action="store_true")
+    parser.add_argument('--self_attn', action="store_true")
+    parser.add_argument('--square_energy', action="store_true")
+    parser.add_argument('--sigmoid', action="store_true")
+    parser.add_argument('--multiscale', action="store_true")
+
 
 
     # DDP options
     parser.add_argument('--local_rank', default=-1, type=int, help='node rank for distributed training')
 
     opt = parser.parse_args()
+    # Conditional generation for downstream KD tasks.
+    opt.cond = True
+    opt.spec_norm = False
 
     # set different learning rate from these 4 models
     if opt.model in ['MobileNetV2', 'ShuffleV1', 'ShuffleV2']:
@@ -178,9 +188,12 @@ def main():
     # model
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
     
-    d, w = opt.model_s.split('x')[0][-2:], opt.model_s.split('x')[1]
+    
     if opt.model_s == 'resnet28x10':
+        d, w = opt.model_s.split('x')[0][-2:], opt.model_s.split('x')[1]
         model_score = model_dict[opt.model_s](depth=int(d), widen_factor=int(w), num_classes=opt.n_cls, norm=opt.norm)
+    elif opt.model_s == 'Energy':
+        model_score = model_dict[opt.model_s](args=opt, num_classes=opt.n_cls)
     else:
         model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm)
     model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)

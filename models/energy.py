@@ -1,12 +1,154 @@
 from torch.nn import ModuleList
 import torch.nn.functional as F
 import torch.nn as nn
+import numpy as np
 import torch
+import math
 from easydict import EasyDict
 from torch.nn.utils import spectral_norm
-from utils import WSConv2d, GaussianSmoothing
-from downsample import Downsample
 from torch.nn import Dropout
+
+def get_pad_layer(pad_type):
+    if(pad_type in ['refl','reflect']):
+        PadLayer = nn.ReflectionPad2d
+    elif(pad_type in ['repl','replicate']):
+        PadLayer = nn.ReplicationPad2d
+    elif(pad_type=='zero'):
+        PadLayer = nn.ZeroPad2d
+    else:
+        print('Pad type [%s] not recognized'%pad_type)
+    return PadLayer
+
+def get_im_si(ds):
+    if ds == 'imagenet':
+        return 224
+    if ds == 'cifar100' or ds == 'cifar10' or ds == 'svhn':
+        return 32
+    if ds == 'lsun' or ds == 'celeba':
+        return 128
+
+class Downsample(nn.Module):
+    def __init__(self, pad_type='reflect', filt_size=3, stride=2, channels=None, pad_off=0):
+        super(Downsample, self).__init__()
+        self.filt_size = filt_size
+        self.pad_off = pad_off
+        self.pad_sizes = [int(1.*(filt_size-1)/2), int(np.ceil(1.*(filt_size-1)/2)), int(1.*(filt_size-1)/2), int(np.ceil(1.*(filt_size-1)/2))]
+        self.pad_sizes = [pad_size+pad_off for pad_size in self.pad_sizes]
+        self.stride = stride
+        self.off = int((self.stride-1)/2.)
+        self.channels = channels
+
+        if(self.filt_size==1):
+            a = np.array([1.,])
+        elif(self.filt_size==2):
+            a = np.array([1., 1.])
+        elif(self.filt_size==3):
+            a = np.array([1., 2., 1.])
+        elif(self.filt_size==4):
+            a = np.array([1., 3., 3., 1.])
+        elif(self.filt_size==5):
+            a = np.array([1., 4., 6., 4., 1.])
+        elif(self.filt_size==6):
+            a = np.array([1., 5., 10., 10., 5., 1.])
+        elif(self.filt_size==7):
+            a = np.array([1., 6., 15., 20., 15., 6., 1.])
+
+        filt = torch.Tensor(a[:,None]*a[None,:])
+        filt = filt/torch.sum(filt)
+        self.register_buffer('filt', filt[None,None,:,:].repeat((self.channels,1,1,1)))
+
+        self.pad = get_pad_layer(pad_type)(self.pad_sizes)
+
+    def forward(self, inp):
+        if(self.filt_size==1):
+            if(self.pad_off==0):
+                return inp[:,:,::self.stride,::self.stride]
+            else:
+                return self.pad(inp)[:,:,::self.stride,::self.stride]
+        else:
+            return F.conv2d(self.pad(inp), self.filt, stride=self.stride, groups=inp.shape[1])
+
+class WSConv2d(nn.Conv2d):
+
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
+                 padding=0, dilation=1, groups=1, bias=True):
+        super(WSConv2d, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, groups, bias)
+
+    def forward(self, x):
+        weight = self.weight
+        weight_mean = weight.mean(dim=1, keepdim=True).mean(dim=2,
+                                  keepdim=True).mean(dim=3, keepdim=True)
+        weight = weight - weight_mean
+        std = weight.view(weight.size(0), -1).std(dim=1).view(-1, 1, 1, 1) + 1e-5
+        weight = weight / std.expand_as(weight)
+        return F.conv2d(x, weight, self.bias, self.stride,
+                        self.padding, self.dilation, self.groups)
+
+
+class GaussianSmoothing(nn.Module):
+    """
+    Apply gaussian smoothing on a
+    1d, 2d or 3d tensor. Filtering is performed seperately for each channel
+    in the input using a depthwise convolution.
+    Arguments:
+        channels (int, sequence): Number of channels of the input tensors. Output will
+            have this number of channels as well.
+        kernel_size (int, sequence): Size of the gaussian kernel.
+        sigma (float, sequence): Standard deviation of the gaussian kernel.
+        dim (int, optional): The number of dimensions of the data.
+            Default value is 2 (spatial).
+    """
+    def __init__(self, channels, kernel_size, sigma, dim=2):
+        super(GaussianSmoothing, self).__init__()
+        if isinstance(kernel_size, numbers.Number):
+            kernel_size = [kernel_size] * dim
+        if isinstance(sigma, numbers.Number):
+            sigma = [sigma] * dim
+
+        # The gaussian kernel is the product of the
+        # gaussian function of each dimension.
+        kernel = 1
+        meshgrids = torch.meshgrid(
+            [
+                torch.arange(size, dtype=torch.float32)
+                for size in kernel_size
+            ]
+        )
+        for size, std, mgrid in zip(kernel_size, sigma, meshgrids):
+            mean = (size - 1) / 2
+            kernel *= 1 / (std * math.sqrt(2 * math.pi)) * \
+                      torch.exp(-((mgrid - mean) / std) ** 2 / 2)
+
+        # Make sure sum of values in gaussian kernel equals 1.
+        kernel = kernel / torch.sum(kernel)
+
+        # Reshape to depthwise convolutional weight
+        kernel = kernel.view(1, 1, *kernel.size())
+        kernel = kernel.repeat(channels, *[1] * (kernel.dim() - 1))
+
+        self.register_buffer('weight', kernel)
+        self.groups = channels
+
+        if dim == 1:
+            self.conv = F.conv1d
+        elif dim == 2:
+            self.conv = F.conv2d
+        elif dim == 3:
+            self.conv = F.conv3d
+        else:
+            raise RuntimeError(
+                'Only 1, 2 and 3 dimensions are supported. Received {}.'.format(dim)
+            )
+
+    def forward(self, input):
+        """
+        Apply gaussian filter to input.
+        Arguments:
+            input (torch.Tensor): Input to apply gaussian filter on.
+        Returns:
+            filtered (torch.Tensor): Filtered output.
+        """
+        return self.conv(input, weight=self.weight, groups=self.groups)
 
 
 def swish(x):
@@ -163,10 +305,10 @@ class MNISTModel(nn.Module):
         # self.relu = torch.nn.ReLU(inplace=True)
 
         self.args = args
-        self.filter_dim = args.filter_dim
+        self.filter_dim = 32
         self.init_main_model()
         self.init_label_map()
-        self.filter_dim = args.filter_dim
+        self.filter_dim = 32
 
         # self.act = self.relu
         self.cond = args.cond
@@ -224,13 +366,14 @@ class MNISTModel(nn.Module):
 
 
 class ResNetModel(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, num_classes=100):
         super(ResNetModel, self).__init__()
         self.act = swish
 
         self.args = args
-        self.spec_norm = args.spec_norm
-        self.norm = args.norm
+        self.spec_norm = True
+        self.norm = args.norm != 'none'
+        self.num_classes = num_classes
         self.init_main_model()
 
         if args.multiscale:
@@ -239,92 +382,101 @@ class ResNetModel(nn.Module):
 
         self.relu = torch.nn.ReLU(inplace=True)
         self.downsample = Downsample(channels=3)
+        
 
         self.cond = args.cond
 
     def init_main_model(self):
         args = self.args
-        filter_dim = args.filter_dim
-        latent_dim = args.filter_dim
-        im_size = args.im_size
+        filter_dim = 32
+        latent_dim = 32
+
+        im_size = get_im_si(args.dataset)
 
         self.conv1 = nn.Conv2d(3, filter_dim, kernel_size=3, stride=1, padding=1)
-        self.res_1a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
-        self.res_1b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
+        self.res_1a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+        self.res_1b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
 
-        self.res_2a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
-        self.res_2b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=10)
+        self.res_2a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+        self.res_2b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
 
-        self.res_3a = CondResBlock(args, filters=2*filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
-        self.res_3b = CondResBlock(args, filters=2*filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=10)
+        self.res_3a = CondResBlock(args, filters=2*filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+        self.res_3b = CondResBlock(args, filters=2*filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
 
-        self.res_4a = CondResBlock(args, filters=4*filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
-        self.res_4b = CondResBlock(args, filters=4*filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=10)
-
+        self.res_4a = CondResBlock(args, filters=4*filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+        self.res_4b = CondResBlock(args, filters=4*filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+        
         self.self_attn = Self_Attn(2 * filter_dim, self.act)
+        self.last_dim = filter_dim * 8
+        
+        self.fc = nn.Linear(filter_dim*8, self.num_classes)
 
         self.energy_map = nn.Linear(filter_dim*8, 1)
 
     def init_mid_model(self):
         args = self.args
-        filter_dim = args.filter_dim
-        latent_dim = args.filter_dim
-        im_size = args.im_size
+        filter_dim = 32
+        latent_dim = 32
+        im_size = get_im_si(args.dataset)
 
         self.mid_conv1 = nn.Conv2d(3, filter_dim, kernel_size=3, stride=1, padding=1)
-        self.mid_res_1a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
-        self.mid_res_1b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
+        self.mid_res_1a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+        self.mid_res_1b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
 
-        self.mid_res_2a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
-        self.mid_res_2b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=10)
+        self.mid_res_2a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+        self.mid_res_2b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
 
-        self.mid_res_3a = CondResBlock(args, filters=2*filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
-        self.mid_res_3b = CondResBlock(args, filters=2*filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=10)
+        self.mid_res_3a = CondResBlock(args, filters=2*filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+        self.mid_res_3b = CondResBlock(args, filters=2*filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+
+        self.mid_fc = nn.Linear(filter_dim*4, self.num_classes)
 
         self.mid_energy_map = nn.Linear(filter_dim*4, 1)
         self.avg_pool = Downsample(channels=3)
 
     def init_small_model(self):
         args = self.args
-        filter_dim = args.filter_dim
-        latent_dim = args.filter_dim
-        im_size = args.im_size
+        filter_dim = 32
+        latent_dim = 32
+        im_size = get_im_si(args.dataset)
 
         self.small_conv1 = nn.Conv2d(3, filter_dim, kernel_size=3, stride=1, padding=1)
-        self.small_res_1a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
-        self.small_res_1b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
+        self.small_res_1a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+        self.small_res_1b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
 
-        self.small_res_2a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=10)
-        self.small_res_2b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=10)
+        self.small_res_2a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+        self.small_res_2b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, spec_norm=self.spec_norm, norm=self.norm, classes=self.num_classes)
+        self.small_fc = nn.Linear(filter_dim*2, 1)
+        self.last_dim = filter_dim * 2
 
         self.small_energy_map = nn.Linear(filter_dim*2, 1)
 
-    def main_model(self, x, latent, compute_feat=False):
+    def main_model(self, x, latent=None, compute_feat=False, is_feat=False):
         x = self.act(self.conv1(x))
 
         x = self.res_1a(x, latent)
-        x = self.res_1b(x, latent)
+        x1 = self.res_1b(x, latent)
 
-        x = self.res_2a(x, latent)
-        x = self.res_2b(x, latent)
+        x = self.res_2a(x1, latent)
+        x2 = self.res_2b(x, latent)
 
         if self.args.self_attn:
-            x, _ = self.self_attn(x)
+            x2, _ = self.self_attn(x2)
 
-        x = self.res_3a(x, latent)
-        x = self.res_3b(x, latent)
+        x = self.res_3a(x2, latent)
+        x3 = self.res_3b(x, latent)
 
-        x = self.res_4a(x, latent)
-        x = self.res_4b(x, latent)
-        x = self.act(x)
+        x = self.res_4a(x3, latent)
+        x4 = self.res_4b(x, latent)
+        x = self.act(x4)
 
         x = x.mean(dim=2).mean(dim=2)
 
         if compute_feat:
             return x
 
-        x = x.view(x.size(0), -1)
-        energy = self.energy_map(x)
+        x5 = x.view(x.size(0), -1)
+        energy = self.fc(x)
 
         if self.args.square_energy:
             energy = torch.pow(energy, 2)
@@ -332,7 +484,10 @@ class ResNetModel(nn.Module):
         if self.args.sigmoid:
             energy = F.sigmoid(energy)
 
-        return energy
+        if is_feat:
+            return [x1, x2, x3, x4, x5], energy
+        else:
+            return energy
 
     def mid_model(self, x, latent):
         x = F.avg_pool2d(x, 3, stride=2, padding=1)
@@ -352,7 +507,8 @@ class ResNetModel(nn.Module):
         x = x.mean(dim=2).mean(dim=2)
 
         x = x.view(x.size(0), -1)
-        energy = self.mid_energy_map(x)
+        # energy = self.mid_energy_map(x)
+        energy = self.mid_fc(x)
 
         if self.args.square_energy:
             energy = torch.pow(energy, 2)
@@ -378,7 +534,8 @@ class ResNetModel(nn.Module):
         x = x.mean(dim=2).mean(dim=2)
 
         x = x.view(x.size(0), -1)
-        energy = self.small_energy_map(x)
+        # energy = self.small_energy_map(x)
+        energy = self.small_fc(x)
 
         if self.args.square_energy:
             energy = torch.pow(energy, 2)
@@ -388,13 +545,15 @@ class ResNetModel(nn.Module):
 
         return energy
 
-    def forward(self, x, latent):
+    def forward(self, x, latent=None, is_feat=False):
         args = self.args
 
         if not self.cond:
             latent = None
-
-        energy = self.main_model(x, latent)
+        if is_feat:
+            feats, energy = self.main_model(x, latent, is_feat=True)
+        else:
+            energy = self.main_model(x, latent)
 
         if args.multiscale:
             large_energy = energy
@@ -404,7 +563,10 @@ class ResNetModel(nn.Module):
             # Add a seperate energy penalizing the different energies from each model
             energy = torch.cat([small_energy, mid_energy, large_energy], dim=-1)
 
-        return energy
+        if is_feat:
+            return feats, energy
+        else:
+            return energy
 
     def compute_feat(self, x, latent):
         return self.main_model(x, None, compute_feat=True)
@@ -431,16 +593,16 @@ class CelebAModel(nn.Module):
 
     def init_main_model(self):
         args = self.args
-        filter_dim = args.filter_dim
-        latent_dim = args.filter_dim
-        im_size = args.im_size
+        filter_dim = 32
+        latent_dim = 32
+        im_size = get_im_si(args.dataset)
 
         self.conv1 = nn.Conv2d(3, filter_dim // 2, kernel_size=3, stride=1, padding=1)
 
         self.res_1a = CondResBlock(args, filters=filter_dim // 2, latent_dim=latent_dim, im_size=im_size, downsample=True, classes=2, norm=args.norm, spec_norm=args.spec_norm)
         self.res_1b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=False, classes=2, norm=args.norm, spec_norm=args.spec_norm)
 
-        self.res_2a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=True, rescale=False, classes=2, norm=args.norm, spec_norm=args.spec_norm)
+        self.res_2a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=True, rescale=False, classes=2, norm=args.norm , spec_norm=args.spec_norm)
         self.res_2b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, classes=2, norm=args.norm, spec_norm=args.spec_norm)
 
         self.res_3a = CondResBlock(args, filters=2*filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, classes=2, norm=args.norm, spec_norm=args.spec_norm)
@@ -455,9 +617,9 @@ class CelebAModel(nn.Module):
 
     def init_mid_model(self):
         args = self.args
-        filter_dim = args.filter_dim
-        latent_dim = args.filter_dim
-        im_size = args.im_size
+        filter_dim = 32
+        latent_dim = 32
+        im_size = get_im_si(args.dataset)
 
         self.mid_conv1 = nn.Conv2d(3, filter_dim, kernel_size=3, stride=1, padding=1)
 
@@ -475,9 +637,9 @@ class CelebAModel(nn.Module):
 
     def init_small_model(self):
         args = self.args
-        filter_dim = args.filter_dim
-        latent_dim = args.filter_dim
-        im_size = args.im_size
+        filter_dim = 32
+        latent_dim = 32
+        im_size = get_im_si(args.dataset)
 
         self.small_conv1 = nn.Conv2d(3, filter_dim, kernel_size=3, stride=1, padding=1)
 
@@ -602,7 +764,7 @@ class CelebAModel(nn.Module):
 
 
 class ImagenetModel(nn.Module):
-    def __init__(self, args):
+    def __init__(self, args, num_classes=1000):
         super(ImagenetModel, self).__init__()
         self.act = swish
         self.max_pool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -618,12 +780,13 @@ class ImagenetModel(nn.Module):
         self.relu = torch.nn.ReLU(inplace=True)
         self.downsample = Downsample(channels=3)
         self.heir_weight = nn.Parameter(torch.Tensor([1.0, 1.0, 1.0]))
+        self.num_classes = num_classes
 
     def init_main_model(self):
         args = self.args
-        filter_dim = args.filter_dim
-        latent_dim = args.filter_dim
-        im_size = args.im_size
+        filter_dim = 32
+        latent_dim = 32
+        im_size = get_im_si(args.dataset)
 
         self.conv1 = nn.Conv2d(3, filter_dim // 2, kernel_size=3, stride=1, padding=1)
 
@@ -640,14 +803,16 @@ class ImagenetModel(nn.Module):
         self.res_4b = CondResBlock(args, filters=4*filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, classes=1000)
 
         self.self_attn = Self_Attn(4 * filter_dim, self.act)
+        self.fc = nn.Linear(filter_dim*8, self.num_classes)
+        self.last_dim = filter_dim*8
 
         self.energy_map = nn.Linear(filter_dim*8, 1)
 
     def init_mid_model(self):
         args = self.args
-        filter_dim = args.filter_dim
-        latent_dim = args.filter_dim
-        im_size = args.im_size
+        filter_dim = 32
+        latent_dim = 32
+        im_size = get_im_si(args.dataset)
 
         self.mid_conv1 = nn.Conv2d(3, filter_dim, kernel_size=3, stride=1, padding=1)
 
@@ -660,15 +825,15 @@ class ImagenetModel(nn.Module):
         self.mid_res_3a = CondResBlock(args, filters=2*filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=False, classes=1000)
         self.mid_res_3b = CondResBlock(args, filters=2*filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, classes=1000)
 
-        # self.mid_fc1 = nn.Linear(filter_dim*4, 128)
+        self.mid_fc = nn.Linear(filter_dim*4, self.num_classes)
         self.mid_energy_map = nn.Linear(filter_dim*4, 1)
         self.avg_pool = Downsample(channels=3)
 
     def init_small_model(self):
         args = self.args
-        filter_dim = args.filter_dim
-        latent_dim = args.filter_dim
-        im_size = args.im_size
+        filter_dim = 32
+        latent_dim = 32
+        im_size = get_im_si(args.dataset)
 
         self.small_conv1 = nn.Conv2d(3, filter_dim, kernel_size=3, stride=1, padding=1)
 
@@ -678,6 +843,7 @@ class ImagenetModel(nn.Module):
         self.small_res_2a = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, downsample=True, rescale=False, classes=1000)
         self.small_res_2b = CondResBlock(args, filters=filter_dim, latent_dim=latent_dim, im_size=im_size, rescale=True, classes=1000)
 
+        self.small_fc = nn.Linear(filter_dim*2, 1)
         self.small_energy_map = nn.Linear(filter_dim*2, 1)
 
     def main_model(self, x, latent):
@@ -703,7 +869,8 @@ class ImagenetModel(nn.Module):
         x = x.mean(dim=2).mean(dim=2)
 
         x = x.view(x.size(0), -1)
-        energy = self.energy_map(x)
+        # energy = self.energy_map(x)
+        
 
         if self.args.square_energy:
             energy = torch.pow(energy, 2)
