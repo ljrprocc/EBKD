@@ -43,19 +43,16 @@ class BasicBlock(nn.Module):
     def __init__(self, in_planes, out_planes, stride, dropRate=0.0, norm='none', act='relu'):
         super(BasicBlock, self).__init__()
         self.norm_layer = get_norm(norm=norm)
-        self.act_layer = get_act(act=act)
+        self.act_layer = nn.LeakyReLU(0.2)
         self.bn1 = self.norm_layer(in_planes)
         self.relu1 = self.act_layer
-        self.conv1 = nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
-                               padding=1, bias=False)
+        self.conv1 = nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=True)
         self.bn2 = self.norm_layer(out_planes)
         self.relu2 = self.act_layer
-        self.conv2 = nn.Conv2d(out_planes, out_planes, kernel_size=3, stride=1,
-                               padding=1, bias=False)
+        self.conv2 = nn.Conv2d(out_planes, out_planes, kernel_size=3, stride=1, padding=1, bias=True)
         self.droprate = dropRate
         self.equalInOut = (in_planes == out_planes)
-        self.convShortcut = (not self.equalInOut) and nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride,
-                               padding=0, bias=False) or None
+        self.convShortcut = (not self.equalInOut) and nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, padding=0, bias=True) or None
 
     def forward(self, x):
         if not self.equalInOut:
@@ -111,15 +108,15 @@ class WideResNet(nn.Module):
         self.nChannels = nChannels[3]
         self.last_dim = nChannels[3]
 
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2. / n))
-            elif isinstance(m, nn.BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
-            elif isinstance(m, nn.Linear):
-                m.bias.data.zero_()
+        # for m in self.modules():
+        #     if isinstance(m, nn.Conv2d):
+        #         n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+        #         m.weight.data.normal_(0, math.sqrt(2. / n))
+        #     elif isinstance(m, nn.BatchNorm2d):
+        #         m.weight.data.fill_(1)
+        #         m.bias.data.zero_()
+        #     elif isinstance(m, nn.Linear):
+        #         m.bias.data.zero_()
 
     def get_feat_modules(self):
         feat_m = nn.ModuleList([])
