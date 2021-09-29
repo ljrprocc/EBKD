@@ -2,21 +2,60 @@ from __future__ import print_function
 
 import torch
 import os
-import numpy as np
 import tqdm
 import random
-import math
-import torch.optim as optim
+import numpy as np
+from PIL import Image
 import torch.nn.functional as F
 import torch.autograd as autograd
 from torch.distributions.dirichlet import Dirichlet
 import torchvision.utils as vutils
+from torchvision import transforms
 # from util import set_require_grad
 import cv2
 
 def init_random(s):
     # print(s)
     return torch.FloatTensor(*s).uniform_(-1, 1)
+
+def get_color_distortion(s=1.0):
+        # s is the strength of color distortion.
+            color_jitter = transforms.ColorJitter(0.8*s, 0.8*s, 0.8*s, 0.4*s)
+            rnd_color_jitter = transforms.RandomApply([color_jitter], p=0.8)
+            rnd_gray = transforms.RandomGrayscale(p=0.2)
+            color_distort = transforms.Compose([
+                rnd_color_jitter,
+                rnd_gray])
+            return color_distort
+
+def augment(dataset, sample):
+    color_transform = get_color_distortion()
+    if dataset == "cifar10" or "cifar100":
+        transform = transforms.Compose([transforms.RandomResizedCrop(32, scale=(0.08, 1.0)), transforms.RandomHorizontalFlip(), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    elif dataset == "continual":
+        color_transform = get_color_distortion(0.1)
+        transform = transforms.Compose([transforms.RandomResizedCrop(64, scale=(0.7, 1.0)), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    elif dataset == "celeba":
+        transform = transforms.Compose([transforms.RandomResizedCrop(128, scale=(0.08, 1.0)), transforms.RandomHorizontalFlip(), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    elif dataset == "imagenet":
+        transform = transforms.Compose([transforms.RandomResizedCrop(128, scale=(0.01, 1.0)), transforms.RandomHorizontalFlip(), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    elif dataset == "object":
+        transform = transforms.Compose([transforms.RandomResizedCrop(128, scale=(0.01, 1.0)), transforms.RandomHorizontalFlip(), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    elif dataset == "lsun":
+        transform = transforms.Compose([transforms.RandomResizedCrop(128, scale=(0.08, 1.0)), transforms.RandomHorizontalFlip(), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
+    elif dataset == "mnist":
+        transform = None
+    elif dataset == "moving_mnist":
+        transform = None
+    else:
+        assert False
+
+    im = sample.permute(1, 2, 0)
+    im = transform(Image.fromarray(np.uint8((im + 1) / 2 * 255)))
+    # print(im.max(),  im.min())
+    return im
+
+
 
 def diag_normal_NLL(z, mu, log_var):
     '''
@@ -86,6 +125,12 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
         if y is not None:
             inds = y.cpu() * buffer_size + inds
         buffer_samples = replay_buffer[inds]
+        if opts.augment:
+            samples = []
+            for sample in buffer_samples:
+                res_samples = augment(opts.dataset, sample)
+                samples.append(res_samples)
+            buffer_samples = torch.stack(samples, 0)
         random_samples = init_random((bs, nc, im_size, im_size))
         # s = (bs, opts.latent_dim)
         # random_samples = init_random(s)
@@ -99,7 +144,7 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
         else:
             return samples.cuda(), inds
 
-    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False, open_clip_grad=None):
+    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False, open_clip_grad=None, train=False):
         """this func takes in replay_buffer now so we have the option to sample from
         scratch (i.e. replay_buffer==[]).  See test_wrn_ebm.py for example.
         """
@@ -114,7 +159,7 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
         now_step_size = opts.step_size
         x_k_pre = init_sample
         for k in range(n_steps):
-            f_prime = torch.autograd.grad(f(x_k, y=y)[0].sum(), [x_k], retain_graph=True)[0]
+            f_prime = torch.autograd.grad(f(x_k, y=y, multiscale=opts.multiscale and train)[0].sum(), [x_k], retain_graph=True)[0]
             noise = 0.01 * torch.randn_like(x_k)
             x_k = x_k + now_step_size * f_prime + noise
             # now_step_size *= 0.99
@@ -275,9 +320,9 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
         y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(x_p.device)
         # The process of get x_q~p_{\theta}(x), stochastic process of x*=argmin_{x}(E_{\theta}(x))
         # print(replay_buffer.shape, y_q.shape)
-        x_q, samples = sample_q(model, replay_buffer, y=y_q)
-        f_p = model(x_p, py=opt.y)[0]
-        f_q = model(x_q, py=opt.y)[0]
+        x_q, samples = sample_q(model, replay_buffer, y=y_q, train=True)
+        f_p = model(x_p, py=opt.y, multiscale=opt.multiscale)[0]
+        f_q = model(x_q, py=opt.y, multiscale=opt.multiscale)[0]
         fp = f_p.mean()
         fq = f_q.mean()
         # print(fp, fq)
@@ -292,10 +337,10 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
     # Followed by the idea of jem
 
     if opt.lmda_p_x_y > 0:
-        x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab)
+        x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab, train=True)
         # -E_{\theta}, bigger better.
-        fpxys = model(x_lab, y_lab, py=opt.y)[0]
-        fqxys = model(x_q_lab, y_lab, py=opt.y)[0]
+        fpxys = model(x_lab, y_lab, py=opt.y, multiscale=opt.multiscale)[0]
+        fqxys = model(x_q_lab, y_lab, py=opt.y, multiscale=opt.multiscale)[0]
         
         fpxy = fpxys.mean()
         fqxy = fqxys.mean()

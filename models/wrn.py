@@ -87,11 +87,16 @@ class WideResNet(nn.Module):
     def __init__(self, depth, num_classes, widen_factor=1, dropRate=0.0, act='relu', norm='none'):
         super(WideResNet, self).__init__()
         nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
+        self.channels = nChannels
+        self.dropRate = dropRate
+        # self.nChannels = nChannels
         assert (depth - 4) % 6 == 0, 'depth should be 6n+4'
         n = (depth - 4) // 6
+        self.n = n
         block = BasicBlock
         act_layer = get_act(act)
         norm_layer = get_norm(norm)
+        self.num_classes = num_classes
         # 1st conv before any network block
         self.conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1,
                                padding=1, bias=False)
@@ -105,8 +110,13 @@ class WideResNet(nn.Module):
         self.bn1 = norm_layer(nChannels[3])
         self.relu = act_layer
         self.fc = nn.Linear(nChannels[3], num_classes)
+        self.set_mid_model(act=act, norm=norm)
+        self.set_small_model(act=act, norm=norm)
+        
+        self.final_fc = nn.Linear(num_classes*3, num_classes)
         self.nChannels = nChannels[3]
         self.last_dim = nChannels[3]
+        
 
         # for m in self.modules():
         #     if isinstance(m, nn.Conv2d):
@@ -133,7 +143,62 @@ class WideResNet(nn.Module):
 
         return [bn1, bn2, bn3]
 
-    def forward(self, x, is_feat=False, preact=False, z=None):
+    def set_mid_model(self, act, norm):
+        block = BasicBlock
+        act_layer = get_act(act)
+        norm_layer = get_norm(norm)
+        n = self.n
+        dropRate = self.dropRate
+        nChannels = self.channels
+        # 1st conv before any network block
+        self.mid_conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1, padding=1, bias=False)
+        # 1st block
+        self.mid_block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropRate, act=act, norm=norm)
+        # 2nd block
+        self.mid_block2 = NetworkBlock(n, nChannels[1], nChannels[2], block, 2, dropRate, act=act, norm=norm)
+        self.mid_fc = nn.Linear(nChannels[2], self.num_classes)
+        self.mid_bn1 = norm_layer(nChannels[2])
+        self.mid_nchannels = nChannels[2]
+
+    def mid_forward(self, x):
+        x = F.avg_pool2d(x, 3, stride=2, padding=1)
+        out = self.relu(self.mid_conv1(x))
+        out = self.mid_block1(out)
+        out = self.mid_block2(out)
+        out = self.relu(self.mid_bn1(out))
+        out = F.avg_pool2d(out, 8)
+        out = out.view(-1, self.mid_nchannels)
+        out = self.mid_fc(out)
+        return out
+
+    def set_small_model(self, act, norm):
+        block = BasicBlock
+        act_layer = get_act(act)
+        norm_layer = get_norm(norm)
+        nChannels = self.channels
+        n = self.n
+        dropRate = self.dropRate
+        # 1st conv before any network block
+        self.small_conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1, padding=1, bias=False)
+        # 1st block
+        self.small_block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropRate, act=act, norm=norm)
+        
+        self.small_fc = nn.Linear(nChannels[1], self.num_classes)
+        self.small_bn1 = norm_layer(nChannels[1])
+        self.small_nchannels = nChannels[1]
+
+    def small_forward(self, x):
+        x = F.avg_pool2d(x, 3, stride=2, padding=1)
+        x = F.avg_pool2d(x, 3, stride=2, padding=1)
+        out = self.relu(self.small_conv1(x))
+        out = self.small_block1(out)
+        out = self.relu(self.small_bn1(out))
+        out = F.avg_pool2d(out, 8)
+        out = out.view(-1, self.small_nchannels)
+        out = self.small_fc(out)
+        return out
+
+    def forward(self, x, is_feat=False, preact=False, z=None, multiscale=False):
         out = self.conv1(x)
         f0 = out
         out = self.block1(out)
@@ -147,6 +212,14 @@ class WideResNet(nn.Module):
         out = out.view(-1, self.nChannels)
         f4 = out
         out = self.fc(out)
+        if multiscale:
+            # x = F.interpolate(x, scale_factor=0.5)
+            mid_out = self.mid_forward(x)
+            # x = F.interpolate(x, scale_factor=0.5)
+            small_out = self.small_forward(x)
+            # print(out.shape, mid_out.shape, small_out.shape)
+            final_out = out + mid_out + small_out
+            # out = self.final_fc(final_out)
         if is_feat:
             if preact:
                 f1 = self.block2.layer[0].bn1(f1)
@@ -186,6 +259,10 @@ def wrn_16_1(**kwargs):
 
 def wrn_28_10(**kwargs):
     model = WideResNet(depth=28, widen_factor=10, **kwargs)
+    return model
+
+def wrn_22_10(**kwargs):
+    model = WideResNet(depth=22, widen_factor=10, **kwargs)
     return model
 
 

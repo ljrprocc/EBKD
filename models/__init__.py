@@ -4,7 +4,7 @@ from .resnetv2 import ResNet50, ResNet18
 from .pretrained_resnet import resnet50, resnet18
 from .widerresnet import Wide_ResNet
 # from torchvision.models.resnet import resnet50, resnet18
-from .wrn import wrn_16_1, wrn_16_2, wrn_40_1, wrn_40_2, wrn_28_10
+from .wrn import wrn_16_1, wrn_16_2, wrn_40_1, wrn_40_2, wrn_28_10, wrn_22_10
 from .vgg import vgg19_bn, vgg16_bn, vgg13_bn, vgg11_bn, vgg8_bn
 from .mobilenetv2 import mobile_half
 from .ShuffleNetv1 import ShuffleV1
@@ -36,6 +36,7 @@ model_dict = {
     'wrn_40_1': wrn_40_1,
     'wrn_40_2': wrn_40_2,
     'wrn_28_10': wrn_28_10,
+    'wrn_22_10': wrn_22_10,
     'vgg8': vgg8_bn,
     'vgg11': vgg11_bn,
     'vgg13': vgg13_bn,
