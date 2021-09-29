@@ -22,6 +22,8 @@ def get_norm(norm='none'):
         norm_layer = nn.BatchNorm2d
     elif norm  == 'instance':
         norm_layer = nn.InstanceNorm2d
+    elif norm == 'group':
+        norm_layer = nn.GroupNorm2d
     elif norm == 'none' or norm == 'spectral':
         norm_layer = Identity
     else:
