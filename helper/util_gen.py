@@ -20,13 +20,13 @@ def init_random(s):
 
 def get_color_distortion(s=1.0):
         # s is the strength of color distortion.
-            color_jitter = transforms.ColorJitter(0.8*s, 0.8*s, 0.8*s, 0.4*s)
-            rnd_color_jitter = transforms.RandomApply([color_jitter], p=0.8)
-            rnd_gray = transforms.RandomGrayscale(p=0.2)
-            color_distort = transforms.Compose([
-                rnd_color_jitter,
-                rnd_gray])
-            return color_distort
+    color_jitter = transforms.ColorJitter(0.8*s, 0.8*s, 0.8*s, 0.4*s)
+    rnd_color_jitter = transforms.RandomApply([color_jitter], p=0.8)
+    rnd_gray = transforms.RandomGrayscale(p=0.2)
+    color_distort = transforms.Compose([
+        rnd_color_jitter,
+        rnd_gray])
+    return color_distort
 
 def augment(dataset, sample):
     color_transform = get_color_distortion()
@@ -135,9 +135,6 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
         # s = (bs, opts.latent_dim)
         # random_samples = init_random(s)
         choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None, None, None]
-        # choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None]
-        # print(random_samples.shape, buffer_samples.shape)
-        # print(random_samples.device, buffer_samples.device)
         samples = choose_random * random_samples + (1 - choose_random) * buffer_samples
         if device:
             return samples.to(device), inds
@@ -159,7 +156,7 @@ def get_sample_q(opts, device=None, open_debug=False, l=None):
         now_step_size = opts.step_size
         x_k_pre = init_sample
         for k in range(n_steps):
-            f_prime = torch.autograd.grad(f(x_k, y=y, multiscale=opts.multiscale and train)[0].sum(), [x_k], retain_graph=True)[0]
+            f_prime = torch.autograd.grad(f(x_k, y=y)[0].sum(), [x_k], retain_graph=True)[0]
             noise = 0.01 * torch.randn_like(x_k)
             x_k = x_k + now_step_size * f_prime + noise
             # now_step_size *= 0.99
@@ -321,8 +318,8 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
         # The process of get x_q~p_{\theta}(x), stochastic process of x*=argmin_{x}(E_{\theta}(x))
         # print(replay_buffer.shape, y_q.shape)
         x_q, samples = sample_q(model, replay_buffer, y=y_q, train=True)
-        f_p = model(x_p, py=opt.y, multiscale=opt.multiscale)[0]
-        f_q = model(x_q, py=opt.y, multiscale=opt.multiscale)[0]
+        f_p = model(x_p, py=opt.y)[0]
+        f_q = model(x_q, py=opt.y)[0]
         fp = f_p.mean()
         fq = f_q.mean()
         # print(fp, fq)
@@ -339,8 +336,8 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
     if opt.lmda_p_x_y > 0:
         x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab, train=True)
         # -E_{\theta}, bigger better.
-        fpxys = model(x_lab, y_lab, py=opt.y, multiscale=opt.multiscale)[0]
-        fqxys = model(x_q_lab, y_lab, py=opt.y, multiscale=opt.multiscale)[0]
+        fpxys = model(x_lab, y_lab, py=opt.y)[0]
+        fqxys = model(x_q_lab, y_lab, py=opt.y)[0]
         
         fpxy = fpxys.mean()
         fqxy = fqxys.mean()

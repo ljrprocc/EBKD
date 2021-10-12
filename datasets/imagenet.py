@@ -6,9 +6,12 @@ from __future__ import print_function
 import os
 import socket
 import numpy as np
+import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets
 from torchvision import transforms
+from torch.utils.data.distributed import DistributedSampler
+from .datasubset import get_dataloaders_and_datasets
 
 
 def get_data_folder():
@@ -137,7 +140,7 @@ def get_test_loader(dataset='imagenet', batch_size=128, num_workers=8):
     return test_loader
 
 
-def get_dataloader_sample(dataset='imagenet', batch_size=128, num_workers=8, is_sample=False, k=4096):
+def get_dataloader_sample(dataset='imagenet', batch_size=128, num_workers=8, is_sample=False, k=4096, use_subdataset=False):
     """Data Loader for ImageNet"""
 
     if dataset == 'imagenet':
@@ -148,28 +151,33 @@ def get_dataloader_sample(dataset='imagenet', batch_size=128, num_workers=8, is_
     # add data transform
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
-    train_transform = transforms.Compose([
+    train_list = [
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         normalize,
-    ])
-    test_transform = transforms.Compose([
+    ]
+    test_list = [
         transforms.Resize(256),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
         normalize,
-    ])
+    ]
+    
+    if use_subdataset:
+        train_list += [lambda x: x + opt.data_noise * torch.randn_like(x)]
+        test_list += [lambda x: x + opt.data_noise * torch.randn_like(x)]
+    train_transform = transforms.Compose(train_list)
+    test_transform = transforms.Compose(test_list)
     train_folder = os.path.join(data_folder, 'train')
     test_folder = os.path.join(data_folder, 'val')
 
     train_set = ImageFolderSample(train_folder, transform=train_transform, is_sample=is_sample, k=k)
     test_set = datasets.ImageFolder(test_folder, transform=test_transform)
-    train_sampler = torch.utils.data.distributed.DistributedSampler(train_set)
+    train_sampler = DistributedSampler(train_set)
 
     train_loader = DataLoader(train_set,
                               batch_size=batch_size,
-                              shuffle=True,
                               num_workers=num_workers,
                               pin_memory=True,
                               sampler=train_sampler)
@@ -181,11 +189,15 @@ def get_dataloader_sample(dataset='imagenet', batch_size=128, num_workers=8, is_
 
     print('num_samples', len(train_set.samples))
     print('num_class', len(train_set.classes))
+    if use_subdataset:
+        dload_train, dload_train_labeled, dload_valid, dload_test = get_dataloaders_and_datasets(train_set, test_set, opt)
+        train_loader = (dload_train, dload_train_labeled)
+        test_loader = (dload_valid, dload_test)
 
     return train_loader, test_loader, len(train_set), len(train_set.classes)
 
 
-def get_imagenet_dataloader(dataset='imagenet', batch_size=128, num_workers=16, is_instance=False):
+def get_imagenet_dataloader(opt, dataset='imagenet', batch_size=128, num_workers=16, is_instance=False, use_subdataset=False):
     """
     Data Loader for imagenet
     """
@@ -196,21 +208,29 @@ def get_imagenet_dataloader(dataset='imagenet', batch_size=128, num_workers=16, 
 
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
-    train_transform = transforms.Compose([
+    train_list = [
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         normalize,
-    ])
-    test_transform = transforms.Compose([
+    ]
+    test_list = [
         transforms.Resize(256),
         transforms.CenterCrop(224),
         transforms.ToTensor(),
         normalize,
-    ])
+    ]
+    
+    if use_subdataset:
+        train_list += [lambda x: x + opt.data_noise * torch.randn_like(x)]
+        test_list += [lambda x: x + opt.data_noise * torch.randn_like(x)]
+    train_transform = transforms.Compose(train_list)
+    test_transform = transforms.Compose(test_list)
 
     train_folder = os.path.join(data_folder, 'train')
     test_folder = os.path.join(data_folder, 'val')
+    
+    
 
     if is_instance:
         train_set = ImageFolderInstance(train_folder, transform=train_transform)
@@ -219,18 +239,25 @@ def get_imagenet_dataloader(dataset='imagenet', batch_size=128, num_workers=16, 
         train_set = datasets.ImageFolder(train_folder, transform=train_transform)
 
     test_set = datasets.ImageFolder(test_folder, transform=test_transform)
-
+    train_sampler = DistributedSampler(train_set)
+    
     train_loader = DataLoader(train_set,
                               batch_size=batch_size,
-                              shuffle=True,
                               num_workers=num_workers,
-                              pin_memory=True)
+                              pin_memory=True,
+                              sampler=train_sampler)
 
     test_loader = DataLoader(test_set,
                              batch_size=batch_size,
                              shuffle=False,
                              num_workers=num_workers//2,
                              pin_memory=True)
+
+    if use_subdataset:
+        dload_train, dload_train_labeled, dload_valid, dload_test = get_dataloaders_and_datasets(train_set, test_set, opt, train_sampler=train_sampler)
+        train_loader = (dload_train, dload_train_labeled)
+        test_loader = (dload_valid, dload_test)
+
 
     if is_instance:
         return train_loader, test_loader, n_data

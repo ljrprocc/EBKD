@@ -23,7 +23,7 @@ def get_norm(norm='none'):
     elif norm  == 'instance':
         norm_layer = nn.InstanceNorm2d
     elif norm == 'group':
-        norm_layer = nn.GroupNorm2d
+        norm_layer = nn.GroupNorm
     elif norm == 'none' or norm == 'spectral':
         norm_layer = Identity
     else:
@@ -86,7 +86,7 @@ class NetworkBlock(nn.Module):
 
 
 class WideResNet(nn.Module):
-    def __init__(self, depth, num_classes, widen_factor=1, dropRate=0.0, act='relu', norm='none'):
+    def __init__(self, depth, num_classes, widen_factor=1, dropRate=0.0, act='relu', norm='none', multiscale=False):
         super(WideResNet, self).__init__()
         nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
         self.channels = nChannels
@@ -99,6 +99,7 @@ class WideResNet(nn.Module):
         act_layer = get_act(act)
         norm_layer = get_norm(norm)
         self.num_classes = num_classes
+        self.multiscale = multiscale
         # 1st conv before any network block
         self.conv1 = nn.Conv2d(3, nChannels[0], kernel_size=3, stride=1,
                                padding=1, bias=False)
@@ -109,15 +110,21 @@ class WideResNet(nn.Module):
         # 3rd block
         self.block3 = NetworkBlock(n, nChannels[2], nChannels[3], block, 2, dropRate, act=act, norm=norm)
         # global average pooling and classifier
-        self.bn1 = norm_layer(nChannels[3])
+        
+        self.last_dim = nChannels[3]
+        if multiscale:
+            # self.last_dim = self.last_dim + nChannels[2] + nChannels[1]
+            self.last_dim += nChannels[2]
+            # self.last_dim += nChannels[1]
+        self.bn1 = norm_layer(self.last_dim)
         self.relu = act_layer
-        self.fc = nn.Linear(nChannels[3], num_classes)
+        self.fc = nn.Linear(self.last_dim, num_classes)
         self.set_mid_model(act=act, norm=norm)
         self.set_small_model(act=act, norm=norm)
         
-        self.final_fc = nn.Linear(num_classes*3, num_classes)
+        # self.final_fc = nn.Linear(num_classes*3, num_classes)
         self.nChannels = nChannels[3]
-        self.last_dim = nChannels[3]
+        # self.last_dim = nChannels[3]
         
 
         # for m in self.modules():
@@ -167,10 +174,10 @@ class WideResNet(nn.Module):
         out = self.relu(self.mid_conv1(x))
         out = self.mid_block1(out)
         out = self.mid_block2(out)
-        out = self.relu(self.mid_bn1(out))
-        out = F.avg_pool2d(out, 8)
-        out = out.view(-1, self.mid_nchannels)
-        out = self.mid_fc(out)
+        # out = self.relu(self.mid_bn1(out))
+        # out = F.avg_pool2d(out, 8)
+        # out = out.view(-1, self.mid_nchannels)
+        # out = self.mid_fc(out)
         return out
 
     def set_small_model(self, act, norm):
@@ -194,13 +201,13 @@ class WideResNet(nn.Module):
         x = F.avg_pool2d(x, 3, stride=2, padding=1)
         out = self.relu(self.small_conv1(x))
         out = self.small_block1(out)
-        out = self.relu(self.small_bn1(out))
-        out = F.avg_pool2d(out, 8)
-        out = out.view(-1, self.small_nchannels)
-        out = self.small_fc(out)
+        # out = self.relu(self.small_bn1(out))
+        # out = F.avg_pool2d(out, 8)
+        # out = out.view(-1, self.small_nchannels)
+        # out = self.small_fc(out)
         return out
 
-    def forward(self, x, is_feat=False, preact=False, z=None, multiscale=False):
+    def forward(self, x, is_feat=False, preact=False, z=None):
         out = self.conv1(x)
         f0 = out
         out = self.block1(out)
@@ -209,18 +216,25 @@ class WideResNet(nn.Module):
         f2 = out
         out = self.block3(out)
         f3 = out
+        if self.multiscale:
+            mid_out = self.mid_forward(x)
+            # small_out = self.small_forward(x)
+            # out = torch.cat([f3, mid_out, small_out], 1)
+            # out = torch.cat([f3, small_out], 1)
+            out = torch.cat([f3, mid_out], 1)
         out = self.relu(self.bn1(out))
         out = F.avg_pool2d(out, 8)
-        out = out.view(-1, self.nChannels)
+        out = out.view(-1, self.last_dim)
         f4 = out
         out = self.fc(out)
-        if multiscale:
-            # x = F.interpolate(x, scale_factor=0.5)
-            mid_out = self.mid_forward(x)
-            # x = F.interpolate(x, scale_factor=0.5)
-            small_out = self.small_forward(x)
-            # print(out.shape, mid_out.shape, small_out.shape)
-            final_out = out + mid_out + small_out
+        # if multiscale:
+        #     # x = F.interpolate(x, scale_factor=0.5)
+        #     mid_out = self.mid_forward(x)
+        #     # x = F.interpolate(x, scale_factor=0.5)
+        #     small_out = self.small_forward(x)
+        #     # print(out.mean(), mid_out.mean(), small_out.mean())
+        #     # print(out.shape, mid_out.shape, small_out.shape)
+        #     out = (out + mid_out + small_out) / 3
             # out = self.final_fc(final_out)
         if is_feat:
             if preact:

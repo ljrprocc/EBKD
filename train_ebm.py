@@ -8,13 +8,10 @@ import time
 import tensorboard_logger as tb_logger
 import torch
 import torch.optim as optim
-import torch.nn as nn
 import torch.backends.cudnn as cudnns
-import numpy as np
+from torch import distributed as dist
 
 from models import model_dict
-from models.util import Embed, ConvReg, LinearEmbed
-from models.util import Connector, Translator, Paraphraser
 
 from datasets.cifar100 import get_cifar100_dataloaders, get_cifar100_dataloaders_sample
 from datasets.imagenet import get_imagenet_dataloader, get_dataloader_sample
@@ -25,6 +22,10 @@ from helper.util_gen import get_replay_buffer, getDirichl
 
 from helper.loops import train_generator, train_joint
 from helper.pretrain import init
+
+# DDP setting
+import torch.multiprocessing as mp
+from torch.nn.parallel import DistributedDataParallel as DDP
 # from helper.util import SampleBuffer
 
 def parse_option():
@@ -58,7 +59,7 @@ def parse_option():
     parser.add_argument('--model', type=str, default='resnet110',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet20x10','resnet28x10' ])
     parser.add_argument('--model_s', type=str, default='resnet8x4',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'wrn_22_10', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10', 'Energy', 'wrn_28_10'])
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'wrn_22_10', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10', 'Energy', 'wrn_28_10', 'ResNet50cifar100'])
     parser.add_argument('--model_stu', type=str, default='resnet8x4',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10'])
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance', 'group'])
@@ -97,10 +98,9 @@ def parse_option():
     parser.add_argument('--multiscale', action="store_true")
     parser.add_argument('--augment', action="store_true")
 
-
-
     # DDP options
     parser.add_argument('--local_rank', default=-1, type=int, help='node rank for distributed training')
+    parser.add_argument('--world_size', default=4, type=int, help='world size for learning DDP')
 
     opt = parser.parse_args()
     # Conditional generation for downstream KD tasks.
@@ -167,25 +167,49 @@ def setup_ranks():
     device = torch.device("cuda", local_rank)
     return local_rank, device
 
-def main():
-    opt = parse_option()
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+
+    # initialize the process group
+    os.environ['OPM_NUM_THREADS'] = '1'
+    master_port = os.environ.get("MASTER_PORT", None)
+    # print(rank, world_size)
+    
+    dist.init_process_group("gloo", rank=rank, world_size=world_size)
+    
+    local_rank = torch.distributed.get_rank()
+    torch.cuda.set_device(local_rank)
+    device = torch.device("cuda", local_rank)
+    return local_rank, device
+
+def cleanup():
+    dist.destroy_process_group()
+
+def main_function(gpu, opt):
+    
+    ddp = opt.dataset == 'imagenet'
+    if ddp:
+        local_rank, device = setup(gpu, opt.world_size)
     opt.save_dir = os.path.join(opt.save_folder, 'img_samples/')
     if not os.path.exists(opt.save_dir):
         os.mkdir(opt.save_dir)
     # dataloader
     opt.datafree = False
-    
+    # 
     if opt.dataset == 'cifar100' or opt.dataset == 'cifar10':
         train_loader, val_loader = get_cifar100_dataloaders(opt, batch_size=opt.batch_size, num_workers=opt.num_workers, use_subdataset=True)
         opt.n_cls = 100 if opt.dataset == 'cifar100' else 10
     elif opt.dataset == 'imagenet':
-        train_loader, val_loader, n_data = get_imagenet_dataloader(batch_size=opt.batch_size, num_workers=opt.num_workers, is_instance=True, use_subdataset=True)
+        train_loader, val_loader, n_data = get_imagenet_dataloader(opt, batch_size=opt.batch_size, num_workers=opt.num_workers, is_instance=True, use_subdataset=True)
         opt.n_cls = 1000
     elif opt.dataset == 'svhn':
         train_loader, val_loader = get_svhn_dataloaders(opt, batch_size=opt.batch_size, num_workers=opt.num_workers, use_subdataset=True)
         opt.n_cls = 10
     else:
         raise NotImplementedError(opt.dataset)
+
+    # print(gpu)
     # model
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
     
@@ -196,13 +220,36 @@ def main():
     elif opt.model_s == 'Energy':
         model_score = model_dict[opt.model_s](args=opt, num_classes=opt.n_cls)
     else:
-        model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm)
+        model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm, act=opt.act, multiscale=opt.multiscale)
     model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
     
     buffer, _ = get_replay_buffer(opt, model=model_score)
     if opt.joint:
         model = load_teacher(opt.path_t, opt)
         model_stu = model_dict[opt.model_stu](num_classes=opt.n_cls, norm='batch')
+    
+
+    if torch.cuda.is_available():
+        if ddp:
+            model_score = model_score.to(device)
+            # criterion = criterion.to(gpu)
+            model_score = DDP(model_score, device_ids=[local_rank], output_device=local_rank)
+
+            if opt.joint:
+                model_stu = model_stu.to(device)
+                model = model.to(device)
+                model_stu = DDP(model_stu, device_ids=[local_rank], output_device=local_rank)
+                model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+
+        else:
+            model_score = model_score.cuda()
+            # criterion = criterion.cuda()
+            if opt.joint:
+                model = model.cuda()
+                model_stu = model_stu.cuda()
+
+        cudnns.benchmark = True
+        cudnns.enabled = True
     # model = model_dict['Score'](model=model, n_cls=opt.n_cls)
     # print(model)
     optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate_ebm, betas=[0.9, 0.999],  weight_decay=opt.weight_decay_ebm)
@@ -212,15 +259,7 @@ def main():
         model_list = [model_score]
     # optimizer = nn.DataParallel(optimizer)
     criterion = TVLoss()
-    if torch.cuda.is_available():
-        
-        model_score = model_score.cuda()
-        criterion = criterion.cuda()
-        if opt.joint:
-            model_stu = model_stu.cuda()
-            model = model.cuda()
-        cudnns.benchmark = True
-        cudnns.enabled = True
+    
 
 
     # tensorboard
@@ -241,6 +280,8 @@ def main():
         print("==> training...")
 
         time1 = time.time()
+        if ddp:
+            train_loader.sampler.set_epoch(epoch)
         if opt.joint:
             train_loss = train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
         else:
@@ -260,13 +301,25 @@ def main():
                 "model_state_dict": model_score.state_dict(),
                 "replay_buffer": buffer
             }
-            torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_epoch_{epoch}.pts'.format(epoch=epoch)))
+            if gpu == 0:
+                torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_epoch_{epoch}.pts'.format(epoch=epoch)))
+
+    cleanup()
+
+def main():
+    opt = parse_option()
+    gpu_nums = torch.cuda.device_count()
+    ddp = opt.dataset == 'imagenet'
+    if ddp and gpu_nums > 1:
+        mp.spawn(main_function, nprocs=gpu_nums, args=(opt,))
+    else:
+        main_function(0, opt)
 
 if __name__ == '__main__':
     import random
-    random.seed(4)
-    torch.manual_seed(4)
-    torch.cuda.manual_seed_all(4)
+    random.seed(3)
+    torch.manual_seed(3)
+    torch.cuda.manual_seed_all(3)
     cudnns.benchmark = True
     cudnns.enabled = True
     cudnns.deterministic = True

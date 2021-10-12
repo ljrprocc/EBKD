@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch.nn.utils import spectral_norm
 import math
 import torch
+from models.util import get_norm, get_act
 
 
 __all__ = ['resnet']
@@ -22,34 +23,6 @@ def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                      padding=1, bias=False)
-
-class Identity(nn.Module):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-    def forward(self, x):
-        return x
-
-def get_norm(norm='none'):
-    if norm == 'batch':
-        norm_layer = nn.BatchNorm2d
-    elif norm  == 'instance':
-        norm_layer = nn.InstanceNorm2d
-    elif norm == 'none' or norm == 'spectral':
-        norm_layer = Identity
-    else:
-        raise NotImplementedError('Son of a total bitch.')
-    return norm_layer
-
-def get_act(act='relu'):
-    if act == 'relu':
-        relu_layer = nn.ReLU(True)
-    elif act == 'leaky':
-        relu_layer = nn.LeakyReLU(0.2, True)
-    elif act == 'swish':
-        relu_layer = nn.SiLU(True)
-    else:
-        raise NotImplementedError('Son of a total bitch.')
-    return relu_layer
 
 class BasicBlock(nn.Module):
     expansion = 1

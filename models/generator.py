@@ -45,14 +45,14 @@ class FF(nn.Module):
         self.n_cls = n_cls
         # self.is_feat = is_feat
 
-    def classify(self, x, is_feat=False, preact=False, multiscale=False):
+    def classify(self, x, is_feat=False, preact=False):
         if is_feat:
-            feats, penult_z = self.f(x, is_feat=is_feat, multiscale=multiscale)
+            feats, penult_z = self.f(x, is_feat=is_feat)
             # print(penult_z.requires_grad)
             # print(self.f(x, is_feat=is_feat, preact=preact))
             return feats, penult_z
         else:
-            penult_z = self.f(x, is_feat=is_feat, multiscale=multiscale)
+            penult_z = self.f(x, is_feat=is_feat)
             return penult_z
     
     def forward(self, x):
@@ -71,10 +71,10 @@ class CCF(FF):
         super(CCF, self).__init__(model=model, n_cls=n_cls)
         # self.is_feat = is_feat
 
-    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False, py=None, multiscale=False):
+    def forward(self, x, y=None, cls_mode=False, is_feat=False, preact=False, py=None):
         #print(cls_mode, is_feat, preact, y)
         
-        feats, logits = super().classify(x, is_feat=True, multiscale=multiscale)
+        feats, logits = super().classify(x, is_feat=True)
         if torch.isnan(logits).any():
             # print(self.f)
             exit(-1)

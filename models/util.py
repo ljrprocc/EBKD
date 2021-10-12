@@ -3,6 +3,35 @@ from __future__ import print_function
 import torch.nn as nn
 import math
 
+class Identity(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+    def forward(self, x):
+        return x
+
+def get_norm(norm='none'):
+    if norm == 'batch':
+        norm_layer = nn.BatchNorm2d
+    elif norm  == 'instance':
+        norm_layer = nn.InstanceNorm2d
+    elif norm == 'group':
+        norm_layer = nn.GroupNorm2d
+    elif norm == 'none' or norm == 'spectral':
+        norm_layer = Identity
+    else:
+        raise NotImplementedError('Son of a total bitch.')
+    return norm_layer
+
+def get_act(act='relu'):
+    if act == 'relu':
+        relu_layer = nn.ReLU(True)
+    elif act == 'leaky':
+        relu_layer = nn.LeakyReLU(0.2, True)
+    elif act == 'swish':
+        relu_layer = nn.SiLU(True)
+    else:
+        raise NotImplementedError('Son of a total bitch.')
+    return relu_layer
 
 class Paraphraser(nn.Module):
     """Paraphrasing Complex Network: Network Compression via Factor Transfer"""
