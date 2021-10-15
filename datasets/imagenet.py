@@ -31,6 +31,14 @@ def get_data_folder():
 
     return data_folder
 
+class NoiseAddtion:
+    def __init__(self, noise):
+        # self.x = x
+        self.noise = noise
+
+    def __call__(self, x):
+        return x + self.noise * torch.randn_like(x)
+
 
 class ImageFolderInstance(datasets.ImageFolder):
     """: Folder datasets which returns the index of the image as well::
@@ -165,8 +173,8 @@ def get_dataloader_sample(dataset='imagenet', batch_size=128, num_workers=8, is_
     ]
     
     if use_subdataset:
-        train_list += [lambda x: x + opt.data_noise * torch.randn_like(x)]
-        test_list += [lambda x: x + opt.data_noise * torch.randn_like(x)]
+        train_list += [NoiseAddtion(opt.data_noise)]
+        test_list += [NoiseAddtion(opt.data_noise)]
     train_transform = transforms.Compose(train_list)
     test_transform = transforms.Compose(test_list)
     train_folder = os.path.join(data_folder, 'train')
@@ -222,8 +230,8 @@ def get_imagenet_dataloader(opt, dataset='imagenet', batch_size=128, num_workers
     ]
     
     if use_subdataset:
-        train_list += [lambda x: x + opt.data_noise * torch.randn_like(x)]
-        test_list += [lambda x: x + opt.data_noise * torch.randn_like(x)]
+        train_list += [NoiseAddtion(opt.data_noise)]
+        test_list += [NoiseAddtion(opt.data_noise)]
     train_transform = transforms.Compose(train_list)
     test_transform = transforms.Compose(test_list)
 

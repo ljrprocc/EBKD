@@ -85,7 +85,7 @@ def parse_option():
     parser.add_argument('--plot_uncond', action="store_true", help="Flag for saving class-conditional samples.")
     parser.add_argument('--plot_cond', action="store_true", help="Flag for saving class-conditional samples")
     parser.add_argument('--load_buffer_path', type=str, default=None, help='If not none, the loading path of replay buffer.')
-    parser.add_argument('--n_valid', type=int, default=5000, help='Set validation data.')
+    parser.add_argument('--n_valid', type=int, default=None, help='Set validation data.')
     parser.add_argument('--labels_per_class', type=int, default=-1, help='Number of labeled examples per class.')
     parser.add_argument('--cls', type=str, default='cls', choices=['cls', 'mi'])
     parser.add_argument('--use_py', action="store_true", help='flag for using conditional distribution p(x|y) instead of p(x,y).')
@@ -233,7 +233,7 @@ def main_function(gpu, opt):
         if ddp:
             model_score = model_score.to(device)
             # criterion = criterion.to(gpu)
-            model_score = DDP(model_score, device_ids=[local_rank], output_device=local_rank)
+            model_score = DDP(model_score, device_ids=[local_rank], output_device=local_rank, find_unused_parameters=True)
 
             if opt.joint:
                 model_stu = model_stu.to(device)
@@ -281,7 +281,10 @@ def main_function(gpu, opt):
 
         time1 = time.time()
         if ddp:
-            train_loader.sampler.set_epoch(epoch)
+            # for loader in train_loader:
+            loader, loader_lb = train_loader
+            loader.sampler.set_epoch(epoch)
+            # loader_lb.sampler.set_epoch(epoch)
         if opt.joint:
             train_loss = train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
         else:

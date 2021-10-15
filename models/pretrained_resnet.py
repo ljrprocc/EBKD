@@ -5,6 +5,7 @@ from torch import Tensor
 import torch
 from typing import Type, Any, Callable, Union, List, Optional
 from models.util import get_act, get_norm
+import torch.nn.functional as F
 
 model_urls = {
     'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
@@ -162,6 +163,8 @@ class ResNet(nn.Module):
         norm_layer = get_norm(norm)
         act_layer = get_act(act)
         self._norm_layer = norm_layer
+        self.block = block
+        self.layers = layers
 
         self.inplanes = 64
         self.dilation = 1
@@ -177,7 +180,7 @@ class ResNet(nn.Module):
         self.conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3,
                                bias=False)
         self.bn1 = norm_layer(self.inplanes)
-        self.relu = nn.ReLU(inplace=True)
+        self.relu = act_layer
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.layer1 = self._make_layer(block, 64, layers[0], norm=norm, act=act)
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=replace_stride_with_dilation[0], norm=norm, act=act)
@@ -189,6 +192,8 @@ class ResNet(nn.Module):
         if multiscale:
             self.last_dim += 256 * block.expansion
             self.last_dim += 128 * block.expansion
+            self.set_mid_model(act, norm)
+            self.set_small_model(act, norm)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
@@ -206,6 +211,61 @@ class ResNet(nn.Module):
                     nn.init.constant_(m.bn3.weight, 0)  # type: ignore[arg-type]
                 elif isinstance(m, BasicBlock):
                     nn.init.constant_(m.bn2.weight, 0)  # type: ignore[arg-type]
+
+    def set_mid_model(self, act, norm):
+        # self.groups = groups
+        # self.base_width = width_per_group
+        block = self.block
+        layers = self.layers
+        norm_layer = get_norm(norm)
+        act_layer = get_act(act)
+        self.mid_conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False)
+        self.mid_bn1 = norm_layer(self.inplanes)
+        # self.relu = act_layer
+        self.mid_maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.mid_layer1 = self._make_layer(block, 64, layers[0], norm=norm, act=act)
+        self.mid_layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=False, norm=norm, act=act)
+        self.mid_layer3 = self._make_layer(block, 256, layers[2], stride=2,dilate=False, norm=norm, act=act)
+
+    def forward_mid(self, x: Tensor):
+        x = self.mid_conv1(x)
+        x = self.mid_bn1(x)
+        x = self.relu(x)
+        x0 = self.mid_maxpool(x)
+
+        x1 = self.mid_layer1(x0)
+        x2 = self.mid_layer2(x1)
+        x3 = self.mid_layer3(x2)
+        return x3
+
+    def set_small_model(self, act, norm):
+        # self.groups = groups
+        # self.base_width = width_per_group
+        block = self.block
+        layers = self.layers
+        norm_layer = get_norm(norm)
+        act_layer = get_act(act)
+        self.small_conv1 = nn.Conv2d(3, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False)
+        self.small_bn1 = norm_layer(self.inplanes)
+        # self.relu = act_layer
+        self.small_maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.small_layer1 = self._make_layer(block, 64, layers[0], norm=norm, act=act)
+        self.small_layer2 = self._make_layer(block, 128, layers[1], stride=2, dilate=False, norm=norm, act=act)
+        # self.small_layer3 = self._make_layer(block, 256, layers[2], stride=2,dilate=False, norm=norm, act=act)
+
+    def forward_small(self, x: Tensor):
+        x = F.avg_pool2d(x, 3, stride=2, padding=1)
+        x = F.avg_pool2d(x, 3, stride=2, padding=1)
+        x = self.small_conv1(x)
+        x = self.small_bn1(x)
+        x = self.relu(x)
+        x0 = self.small_maxpool(x)
+
+        x1 = self.small_layer1(x0)
+        x2 = self.small_layer2(x1)
+        # x3 = self.small_layer3(x2)
+        return x2
+
 
     def _make_layer(self, block: Type[Union[BasicBlock, Bottleneck]], planes: int, blocks: int, stride: int = 1, dilate: bool = False, norm: str = 'none', act: str = 'relu') -> nn.Sequential:
         # norm_layer = self._norm_layer
@@ -241,7 +301,9 @@ class ResNet(nn.Module):
         x3 = self.layer3(x2)
         x4 = self.layer4(x3)
         if multiscale:
-            raise NotImplementedError('Not implemented multiscale yet.')
+            x_small = self.forward_small(x)
+            x_mid = self.forward_mid(x)
+            x4 = torch.cat([x4, x_small, x_mid], 1)
 
         x4 = self.avgpool(x4)
         x5 = torch.flatten(x4, 1)
@@ -249,6 +311,8 @@ class ResNet(nn.Module):
         if is_feat:
             return [x0, x1, x2, x3, x4, x5], out
         return out
+
+    
 
     def forward(self, x: Tensor, is_feat=False, preact=False) -> Tensor:
         return self._forward_impl(x, is_feat, preact)

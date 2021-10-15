@@ -33,11 +33,13 @@ def get_dataloaders_and_datasets(base_dataset, test_base_dataset, opt, train_sam
     # Shuffle
     np.random.shuffle(all_inds)
     if opt.dataset == 'imagenet':
-        save_dir = '/data/lijingru/imagenet_np/random'
+        save_dir = '/data/lijingru/imagenet_nps/random'
     if opt.n_valid is not None:
         valid_inds, train_inds = all_inds[:opt.n_valid], all_inds[opt.n_valid:]
     else:
         valid_inds, train_inds = [], all_inds
+
+    # print(len(all_inds))
     
     train_inds = np.array(train_inds)
     # print('************8')
@@ -47,25 +49,31 @@ def get_dataloaders_and_datasets(base_dataset, test_base_dataset, opt, train_sam
     # print(train_inds.shape)
     # print('Preprocessing data:')
     trains = []
-    load_local=False
+    load_local = False
     if opt.dataset == 'imagenet':
         i = 0
         while True:
-            if os.path.isfile(save_dir + '{}.npy'.format(i)):
+            # print(save_dir + '{}.npy.npz'.format(i))
+            if os.path.isfile(save_dir + '{}.npy.npz'.format(i)):
                 i += 1
             else:
                 break
-        if i > 0:
-            train_idx = random.randint(0, i)
-            train_labels = np.load(save_dir + '{}.npy'.format(train_idx))
+        
         if not load_local or i == 0:
             for ind in tqdm.tqdm(train_inds, desc='Processing data'):
                 trains.append(full_train[ind][1])
             train_labels = np.array(trains)
-            np.save(save_dir + '{}.npy'.format(i), train_labels)
+            np.savez(save_dir + '{}.npy'.format(i), lb=train_labels, ind=train_inds)
+        else:
+            train_idx = random.randint(0, i - 1)
+            ckpt = np.load(save_dir + '{}.npy.npz'.format(train_idx))
+            train_labels = ckpt['lb']
+            train_inds = ckpt['ind']
 
     else:
         train_labels = np.array([full_train[ind][1] for ind in train_inds])
+
+    # print(len(train_labels), len(train_inds), len(base_dataset))
     
     if opt.labels_per_class > 0:
         for i in range(opt.n_cls):
@@ -82,6 +90,7 @@ def get_dataloaders_and_datasets(base_dataset, test_base_dataset, opt, train_sam
         base_dataset,
         inds=train_labeled_inds
     )
+    # print(len(dset_train), len(dset_train_labeled))
     dset_valid = DataSubSet(
         base_dataset,
         inds=valid_inds
