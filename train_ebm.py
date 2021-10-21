@@ -59,7 +59,7 @@ def parse_option():
     parser.add_argument('--model', type=str, default='resnet110',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet20x10','resnet28x10' ])
     parser.add_argument('--model_s', type=str, default='resnet8x4',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'wrn_22_10', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10', 'Energy', 'wrn_28_10', 'ResNet50cifar100'])
+                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'wrn_22_10', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10', 'Energy', 'wrn_28_10', 'ResNet50cifar100', 'ResNet18'])
     parser.add_argument('--model_stu', type=str, default='resnet8x4',
                         choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10'])
     parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance', 'group'])
@@ -195,6 +195,8 @@ def main_function(gpu, opt):
     if not os.path.exists(opt.save_dir):
         os.mkdir(opt.save_dir)
     # dataloader
+    # print(local_rank, gpu)
+    # exit(-1)
     opt.datafree = False
     # 
     if opt.dataset == 'cifar100' or opt.dataset == 'cifar10':
@@ -267,7 +269,8 @@ def main_function(gpu, opt):
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
     
     opt.y = getDirichl(opt.path_t) if opt.use_py else None
-    print(opt)
+    if (not ddp) or gpu == 0:
+        print(opt)
     # print(opt.y)
     # routine
     for epoch in range(opt.init_epochs+1, opt.epochs + 1):
@@ -277,7 +280,8 @@ def main_function(gpu, opt):
                 param_group['lr'] = new_lr
 
         adjust_learning_rate(epoch, opt, optimizer)
-        print("==> training...")
+        if (not ddp) or gpu == 0:
+            print("==> training...")
 
         time1 = time.time()
         if ddp:
@@ -288,7 +292,7 @@ def main_function(gpu, opt):
         if opt.joint:
             train_loss = train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
         else:
-            train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
+            train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger, local_rank=gpu)
         time2 = time.time()
         logger.log_value('train_loss', train_loss, epoch)
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
@@ -320,9 +324,9 @@ def main():
 
 if __name__ == '__main__':
     import random
-    random.seed(3)
-    torch.manual_seed(3)
-    torch.cuda.manual_seed_all(3)
+    random.seed(5)
+    torch.manual_seed(5)
+    torch.cuda.manual_seed_all(5)
     cudnns.benchmark = True
     cudnns.enabled = True
     cudnns.deterministic = True

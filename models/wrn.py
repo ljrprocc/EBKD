@@ -61,10 +61,13 @@ class BasicBlock(nn.Module):
             x = self.relu1(self.bn1(x))
         else:
             out = self.relu1(self.bn1(x))
+        # print('bn1:', out.shape)
         out = self.relu2(self.bn2(self.conv1(out if self.equalInOut else x)))
+        # print('bn2:', out.shape)
         if self.droprate > 0:
             out = F.dropout(out, p=self.droprate, training=self.training)
         out = self.conv2(out)
+        # print('conv3:', out.shape)
         return torch.add(x if self.equalInOut else self.convShortcut(x), out)
 
 
@@ -120,7 +123,7 @@ class WideResNet(nn.Module):
         self.relu = act_layer
         self.fc = nn.Linear(self.last_dim, num_classes)
         self.set_mid_model(act=act, norm=norm)
-        self.set_small_model(act=act, norm=norm)
+        # self.set_small_model(act=act, norm=norm)
         
         # self.final_fc = nn.Linear(num_classes*3, num_classes)
         self.nChannels = nChannels[3]
@@ -210,7 +213,9 @@ class WideResNet(nn.Module):
     def forward(self, x, is_feat=False, preact=False, z=None):
         out = self.conv1(x)
         f0 = out
+        # print('conv1:', out.shape)
         out = self.block1(out)
+        # print('block1:', out.shape)
         f1 = out
         out = self.block2(out)
         f2 = out
@@ -224,7 +229,9 @@ class WideResNet(nn.Module):
             out = torch.cat([f3, mid_out], 1)
         out = self.relu(self.bn1(out))
         out = F.avg_pool2d(out, 8)
-        out = out.view(-1, self.last_dim)
+        out = out.mean(dim=(2,3))
+        # print(out.shape, self.last_dim)
+        # out = out.view(-1, self.last_dim)
         f4 = out
         out = self.fc(out)
         # if multiscale:

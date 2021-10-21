@@ -49,7 +49,7 @@ def get_dataloaders_and_datasets(base_dataset, test_base_dataset, opt, train_sam
     # print(train_inds.shape)
     # print('Preprocessing data:')
     trains = []
-    load_local = False
+    load_local = True
     if opt.dataset == 'imagenet':
         i = 0
         while True:

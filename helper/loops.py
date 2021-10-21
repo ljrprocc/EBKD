@@ -207,7 +207,7 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
     return losses.avg
 
 
-def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger):
+def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger, local_rank=None):
     '''One epoch for training generator with teacher'''
     '''One epoch for training generator with teacher'''
     # model_t, model = model_list
@@ -302,6 +302,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
             logger.log_value('accuracy', acc, global_iter)
         
         accs.update(acc, input.size(0))
+        ddp = (opt.dataset == 'imagenet')
         # print info
         if idx % opt.print_freq == 0:
             string = 'Epoch: [{0}][{1}/{2}]\tTime {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tLoss {loss.val:.4f} ({loss.avg:.4f})\n'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss=losses)
@@ -315,7 +316,8 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
                     string += 'p(x, y) f(x+) {fpxy.val:.4f} ({fpxy.avg:.4f})\t'.format(fpxy=fpxys)
                 string += 'f(x-) {fqxy.val:.4f} ({fqxy.avg:.4f})\n'.format(fqxy=fqxys)
             string += 'Acc: {accs.val:.4f} ({accs.avg:.4f})\n'.format(accs=accs)
-            print(string)
+            if (not ddp) or local_rank == 0:
+                print(string)
             sys.stdout.flush()
             if opt.plot_uncond:
                 y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(input.device)

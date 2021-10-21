@@ -72,7 +72,7 @@ def diag_standard_normal_NLL(z):
     nll = 0.5 * (z * z)
     return nll.squeeze()
 
-def get_replay_buffer(opt, model=None):
+def get_replay_buffer(opt, model=None, local_rank=None):
     
     nc = 3
     if opt.dataset == 'cifar100' or opt.dataset == 'cifar10' or opt.dataset == 'svhn':
@@ -85,6 +85,9 @@ def get_replay_buffer(opt, model=None):
         replay_buffer = init_random((bs, nc, im_size, im_size))
     else:
         print('Loading replay buffer from local..')
+        ddp = (opt.dataset == 'imagenet')
+        if ddp:
+            map_location = {'cuda:%d' % 0: 'cuda:%d' % local_rank}
         ckpt_dict = torch.load(opt.load_buffer_path)
         replay_buffer = ckpt_dict["replay_buffer"]
         if model:
@@ -351,8 +354,11 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
 
     # P(y | x). Here needs the update of x.
     # print(len(logit))
+    # print(x_lab.shape, y_lab.shape)
     logit = model(x_lab, cls_mode=True)
+    # print(logit.shape, x_lab.shape)
     l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
+    
     L += l_cls
     # l_cls.backward
     # l_cls = -torch.log_softmax(logit, 1).mean() - math.log(opt.n_cls)
