@@ -234,15 +234,6 @@ class WideResNet(nn.Module):
         # out = out.view(-1, self.last_dim)
         f4 = out
         out = self.fc(out)
-        # if multiscale:
-        #     # x = F.interpolate(x, scale_factor=0.5)
-        #     mid_out = self.mid_forward(x)
-        #     # x = F.interpolate(x, scale_factor=0.5)
-        #     small_out = self.small_forward(x)
-        #     # print(out.mean(), mid_out.mean(), small_out.mean())
-        #     # print(out.shape, mid_out.shape, small_out.shape)
-        #     out = (out + mid_out + small_out) / 3
-            # out = self.final_fc(final_out)
         if is_feat:
             if preact:
                 f1 = self.block2.layer[0].bn1(f1)

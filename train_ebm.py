@@ -4,6 +4,7 @@ import os
 import argparse
 import socket
 import time
+import yaml
 
 import tensorboard_logger as tb_logger
 import torch
@@ -18,9 +19,9 @@ from datasets.imagenet import get_imagenet_dataloader, get_dataloader_sample
 from datasets.svhn import get_svhn_dataloaders, get_svhn_dataloaders_sample
 
 from helper.util import adjust_learning_rate, TVLoss
-from helper.util_gen import get_replay_buffer, getDirichl
+from helper.util_gen import get_replay_buffer, getDirichl, add_dict
 
-from helper.loops import train_generator, train_joint
+from helper.gen_loops import train_generator, train_joint
 from helper.pretrain import init
 
 # DDP setting
@@ -40,7 +41,7 @@ def parse_option():
     parser.add_argument('--epochs', type=int, default=240, help='number of training epochs')
     parser.add_argument('--init_epochs', type=int, default=0, help='init training for two-stage methods and resume')
     parser.add_argument('--warmup_iters', type=int, default=200, help="number of iters to linearly increase learning rate, -1 set no warmup.")
-    parser.add_argument('--data_noise', type=float, default=0.03, help="The adding noise for sampling data point x~p_data.")
+    # parser.add_argument('--data_noise', type=float, default=0.03, help="The adding noise for sampling data point x~p_data.")
 
     # optimization
     parser.add_argument('--learning_rate_ebm', type=float, default=0.01, help='learning rate')
@@ -51,23 +52,13 @@ def parse_option():
 
     # dataset
     parser.add_argument('--dataset', type=str, default='cifar100', choices=['cifar10', 'cifar100', 'imagenet', 'svhn'], help='dataset')
+    parser.add_argument('--config', type=str, default='./configs/jem.yaml')
 
     # # I/O
     # parser.add_argument('--save_dir', type=str, default='../save/', help='The directory for saving the generated samples.')
 
     # model
-    parser.add_argument('--model', type=str, default='resnet110',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet20x10','resnet28x10' ])
-    parser.add_argument('--model_s', type=str, default='resnet8x4',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'wrn_22_10', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10', 'Energy', 'wrn_28_10', 'ResNet50cifar100', 'ResNet18'])
-    parser.add_argument('--model_stu', type=str, default='resnet8x4',
-                        choices=['resnet8', 'resnet14', 'resnet20', 'resnet32', 'resnet44', 'resnet56', 'resnet110', 'resnet8x4', 'resnet32x4', 'resnet20x10','resnet26x10', 'wrn_16_1', 'wrn_16_2', 'wrn_40_1', 'wrn_40_2', 'vgg8', 'vgg11', 'vgg13', 'vgg16', 'vgg19', 'MobileNetV2', 'ShuffleV1', 'ShuffleV2', 'ResNet50','resnet32x10','resnet28x10'])
-    parser.add_argument('--norm', type=str, default='none', choices=['none', 'batch', 'instance', 'group'])
-    parser.add_argument('--act', type=str, default='relu', choices=['relu', 'leaky', 'swish'])
     parser.add_argument('--joint', action="store_true", help='Flag for whether adding l_c term when training EBM.')
-    
-    
-    parser.add_argument('--path_t', type=str, default=None, help='teacher model snapshot')
 
     parser.add_argument('--energy', default='mcmc', type=str, help='Sampling method to update EBM.')
     parser.add_argument('--lmda_ebm', default=0.7, type=float, help='Hyperparameter for update EBM.')
@@ -76,25 +67,17 @@ def parse_option():
     parser.add_argument('--lmda_p_x', default=1., type=float, help='Hyperparameter for building p(x)')
     parser.add_argument('--lmda_p_x_y', default=0., type=float, help='Hyperparameter for building p(x,y)')
     parser.add_argument('--lmda_e', default=0.1, type=float, help='Hyperparameter for kl divergence of negative student and positive teacher.')
-    parser.add_argument('--g_steps', default=20, type=int, help='Total MCMC steps for generating images.')
     parser.add_argument('--lc_K', default=5, type=int, help='Sample K steps for policy gradient. ')
-    parser.add_argument('--step_size', default=1, type=float, help='learning rate of MCMC updation.')
-    parser.add_argument('--capcitiy', default=10000, type=int, help='Capcity of sample buffer.')
     parser.add_argument('--trial', type=str, default='1', help='trial id')
-    parser.add_argument('--reinit_freq', type=float, default=0.05, help='reinitialization frequency.')
     parser.add_argument('--plot_uncond', action="store_true", help="Flag for saving class-conditional samples.")
     parser.add_argument('--plot_cond', action="store_true", help="Flag for saving class-conditional samples")
     parser.add_argument('--load_buffer_path', type=str, default=None, help='If not none, the loading path of replay buffer.')
     parser.add_argument('--n_valid', type=int, default=None, help='Set validation data.')
     parser.add_argument('--labels_per_class', type=int, default=-1, help='Number of labeled examples per class.')
     parser.add_argument('--cls', type=str, default='cls', choices=['cls', 'mi'])
-    parser.add_argument('--use_py', action="store_true", help='flag for using conditional distribution p(x|y) instead of p(x,y).')
     parser.add_argument('--st', type=int, default=-1, help="Inital sample step for policy gradient. -1 for random sample.")
     # model options
-    # parser.add_argument('--alias', action="store_true")
     parser.add_argument('--self_attn', action="store_true")
-    # parser.add_argument('--square_energy', action="store_true")
-    # parser.add_argument('--sigmoid', action="store_true")
     parser.add_argument('--multiscale', action="store_true")
     parser.add_argument('--augment', action="store_true")
 
@@ -103,6 +86,9 @@ def parse_option():
     parser.add_argument('--world_size', default=4, type=int, help='world size for learning DDP')
 
     opt = parser.parse_args()
+    with open(opt.config, 'r') as f:
+        opt_m = yaml.load(f)
+        opt_m = add_dict(opt, opt_m)
     # Conditional generation for downstream KD tasks.
     opt.cond = True
     opt.spec_norm = False

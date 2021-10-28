@@ -11,50 +11,14 @@ import torch.autograd as autograd
 from torch.distributions.dirichlet import Dirichlet
 import torchvision.utils as vutils
 from torchvision import transforms
+from helper.sampling import freshh, langevin_at_x
 # from util import set_require_grad
 import cv2
 
-def init_random(s):
-    # print(s)
-    return torch.FloatTensor(*s).uniform_(-1, 1)
-
-def get_color_distortion(s=1.0):
-        # s is the strength of color distortion.
-    color_jitter = transforms.ColorJitter(0.8*s, 0.8*s, 0.8*s, 0.4*s)
-    rnd_color_jitter = transforms.RandomApply([color_jitter], p=0.8)
-    rnd_gray = transforms.RandomGrayscale(p=0.2)
-    color_distort = transforms.Compose([
-        rnd_color_jitter,
-        rnd_gray])
-    return color_distort
-
-def augment(dataset, sample):
-    color_transform = get_color_distortion()
-    if dataset == "cifar10" or "cifar100":
-        transform = transforms.Compose([transforms.RandomResizedCrop(32, scale=(0.08, 1.0)), transforms.RandomHorizontalFlip(), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-    elif dataset == "continual":
-        color_transform = get_color_distortion(0.1)
-        transform = transforms.Compose([transforms.RandomResizedCrop(64, scale=(0.7, 1.0)), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-    elif dataset == "celeba":
-        transform = transforms.Compose([transforms.RandomResizedCrop(128, scale=(0.08, 1.0)), transforms.RandomHorizontalFlip(), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-    elif dataset == "imagenet":
-        transform = transforms.Compose([transforms.RandomResizedCrop(128, scale=(0.01, 1.0)), transforms.RandomHorizontalFlip(), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-    elif dataset == "object":
-        transform = transforms.Compose([transforms.RandomResizedCrop(128, scale=(0.01, 1.0)), transforms.RandomHorizontalFlip(), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-    elif dataset == "lsun":
-        transform = transforms.Compose([transforms.RandomResizedCrop(128, scale=(0.08, 1.0)), transforms.RandomHorizontalFlip(), color_transform, transforms.ToTensor(), transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))])
-    elif dataset == "mnist":
-        transform = None
-    elif dataset == "moving_mnist":
-        transform = None
-    else:
-        assert False
-
-    im = sample.permute(1, 2, 0)
-    im = transform(Image.fromarray(np.uint8((im + 1) / 2 * 255)))
-    # print(im.max(),  im.min())
-    return im
-
+def add_dict(c, d):
+    # Register new key-value pairs
+    for k, v in d:
+        c.__dict__[k] = v
 
 
 def diag_normal_NLL(z, mu, log_var):
@@ -72,28 +36,6 @@ def diag_standard_normal_NLL(z):
     nll = 0.5 * (z * z)
     return nll.squeeze()
 
-def get_replay_buffer(opt, model=None, local_rank=None):
-    
-    nc = 3
-    if opt.dataset == 'cifar100' or opt.dataset == 'cifar10' or opt.dataset == 'svhn':
-        im_size = 32
-    else:
-        im_size = 224
-    if not opt.load_buffer_path:
-        bs = opt.capcitiy
-        # replay_buffer = init_random((bs, opt.latent_dim))
-        replay_buffer = init_random((bs, nc, im_size, im_size))
-    else:
-        print('Loading replay buffer from local..')
-        ddp = (opt.dataset == 'imagenet')
-        if ddp:
-            map_location = {'cuda:%d' % 0: 'cuda:%d' % local_rank}
-        ckpt_dict = torch.load(opt.load_buffer_path)
-        replay_buffer = ckpt_dict["replay_buffer"]
-        if model:
-            model.load_state_dict(ckpt_dict["model_state_dict"])
-    return replay_buffer, model
-
 def getDirichl(net_path, scale=1, sim_scale=1):
     sim_matrix = create_similarity(net_path, scale=sim_scale)
     # X = torch.zeros(bs, num_classes).to(sim_matrix.device)
@@ -101,119 +43,7 @@ def getDirichl(net_path, scale=1, sim_scale=1):
     c_n = c_n * scale + 0.000001
     diri = Dirichlet(c_n)
     X = diri.rsample()
-    return X.mean(0)       
-
-def get_sample_q(opts, device=None, open_debug=False, l=None):
-    # bs = opt.capcitiy
-    nc = 3
-    if opts.dataset == 'cifar100':
-        im_size = 32
-        n_cls = 100
-    elif opts.dataset == 'imagenet':
-        im_size = 224
-        n_cls = 1000
-    else:
-        im_size = 32
-        n_cls = 10
-    sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
-    plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
-    def sample_p_0(replay_buffer, bs, y=None):
-        if len(replay_buffer) == 0:
-            return init_random((bs, nc, im_size, im_size)), []
-            # return init_random((bs, l)), []
-        buffer_size = len(replay_buffer) if y is None else len(replay_buffer) // opts.n_cls
-        # print(replay_buffer)
-        inds = torch.randint(0, buffer_size, (bs,))
-        # if cond, convert inds to class conditional inds
-        if y is not None:
-            inds = y.cpu() * buffer_size + inds
-        buffer_samples = replay_buffer[inds]
-        if opts.augment:
-            samples = []
-            for sample in buffer_samples:
-                res_samples = augment(opts.dataset, sample)
-                samples.append(res_samples)
-            buffer_samples = torch.stack(samples, 0)
-        random_samples = init_random((bs, nc, im_size, im_size))
-        # s = (bs, opts.latent_dim)
-        # random_samples = init_random(s)
-        choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None, None, None]
-        samples = choose_random * random_samples + (1 - choose_random) * buffer_samples
-        if device:
-            return samples.to(device), inds
-        else:
-            return samples.cuda(), inds
-
-    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False, open_clip_grad=None, train=False):
-        """this func takes in replay_buffer now so we have the option to sample from
-        scratch (i.e. replay_buffer==[]).  See test_wrn_ebm.py for example.
-        """
-        f.eval()
-        # get batch size
-        bs = opts.batch_size if y is None else y.size(0)
-        # generate initial samples and buffer inds of those samples (if buffer is used)
-        init_sample, buffer_inds = sample_p_0(replay_buffer, bs=bs, y=y)
-        x_k = torch.autograd.Variable(init_sample, requires_grad=True)
-        # sgld
-        samples = []
-        now_step_size = opts.step_size
-        x_k_pre = init_sample
-        for k in range(n_steps):
-            f_prime = torch.autograd.grad(f(x_k, y=y)[0].sum(), [x_k], retain_graph=True)[0]
-            noise = 0.01 * torch.randn_like(x_k)
-            x_k = x_k + now_step_size * f_prime + noise
-            # now_step_size *= 0.99
-            # print((now_step_size * f_prime + noise).mean())
-            if y is not None:
-                samples.append((x_k, x_k_pre, noise))
-            # if open_clip_grad:
-            #     torch.nn.utils.clip_grad_norm_(f.parameters(), max_norm=open_clip_grad)
-                # plot('{}/debug_{}.png'.format(opts.save_folder, k))
-                # exit(-1)
-            x_k_pre = x_k.detach()
-            
-            
-        f.train()
-        
-        final_samples = x_k.detach()
-        # update replay buffer
-        if len(replay_buffer) > 0:
-            replay_buffer[buffer_inds] = final_samples.cpu()
-        if y is not None:
-            return final_samples, samples
-        else:
-            return final_samples
-
-    return sample_q
-
-def freshh(model, opt, device, replay_buffer=None, save=True):
-    sample_q, _ = get_sample_q(opts=opt, device=device)
-    sqrt = lambda x: int(torch.sqrt(torch.Tensor([x])))
-    plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
-
-    replay_buffer = torch.FloatTensor(opt.buffer_size, 3, 32, 32).uniform_(-1, 1)
-    print(replay_buffer.shape)
-    y = torch.arange(0, opt.n_cls).to(device)
-    if opt.resume != 'none':
-        ckpt = torch.load(opt.resume)
-        replay_buffer = ckpt['replay_buffer']
-    for i in tqdm.tqdm( range(opt.init_epoch,opt.n_sample_steps)):
-        samples, _ = sample_q(model, replay_buffer, y=y)
-        # if i == 0:
-        #     ckpt_dict = {
-        #         "model_state_dict": model.state_dict(),
-        #         "replay_buffer": replay_buffer
-        #     }
-        #     torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_buffer_0.pts'))
-        if i % opt.print_every == 0 and save:
-            plot('{}/samples_{}.png'.format(opt.save_folder, i), samples)
-            ckpt_dict = {
-                "model_state_dict": model.state_dict(),
-                "replay_buffer": replay_buffer
-            }
-            torch.save(ckpt_dict, os.path.join(opt.save_ckpt, 'res_buffer_{}.pts'.format(i)))
-        # print(i)
-    return replay_buffer
+    return X.mean(0) 
 
 def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=False):
     sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
@@ -275,18 +105,6 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
 
     return replay_buffer
 
-    # print([len(c) for c in each_class])
-    # for i in range(100):
-    #     this_im = []
-    #     for l in range(n_cls):
-    #         this_l = each_class[l][i*n_cls:(i+1)*n_cls]
-    #         this_im.append(this_l)
-    #     this_im = torch.cat(this_im, 0)
-    #     print(this_im)
-    #     # print(this_im.size(0))
-    #     if this_im.size(0) > 0:
-    #         plot('{}/samples_{}.png'.format(opt.save_dir, i), this_im)
-
 def update_lc_theta(opt, x_q, t_logit, y_gt, s_logit, t_logit_true):
     # l_tv = get_image_prior_losses(x_q)
     n_cls = opt.n_cls
@@ -311,7 +129,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
     else:
         model = models[0]
         # model_t.eval()
-    sample_q = get_sample_q(opt, x_p.device)
+    sample_q = langevin_at_x(opt, x_p.device)
     cache_p_x = None
     cache_p_x_y = None
     ls = []
@@ -353,8 +171,6 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
         ls.append(0.0)
 
     # P(y | x). Here needs the update of x.
-    # print(len(logit))
-    # print(x_lab.shape, y_lab.shape)
     logit = model(x_lab, cls_mode=True)
     # print(logit.shape, x_lab.shape)
     l_cls = torch.nn.CrossEntropyLoss()(logit, y_lab)
@@ -386,8 +202,6 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
             with torch.no_grad():
                 logit_s = model_s(x_k_minus_1)
                 logit_t = model_t(x_k_minus_1)
-                
-                # f_q_k_minus_1 = model(x_neg, y=y_lab, py=opt.y)[0]
                 l_c_k_minus_1, cache_l_k_1 = update_lc_theta(opt, x_k_minus_1, logit_t, y_pos, logit_s, logit_t_pos) # l_c_{k-1}.requires_grad = False
                 l2_k_1, l_cls_k_1, l_e_k_1 = cache_l_k_1
             # lc target updation
@@ -434,29 +248,3 @@ def create_similarity(netT_path, scale=1):
     weight_normed = weight / torch.norm(weight, dim=1).unsqueeze(-1)
     # print(weight_normed)
     return torch.matmul(weight_normed, weight_normed.T) / scale
-
-def NT_XentLoss(z1, z2, temperature=0.5):
-    '''
-    SimCLR NT-Xent Loss.
-    '''
-    z1 = F.normalize(z1, dim=1)
-    z2 = F.normalize(z2, dim=1)
-    N, Z = z1.shape 
-    device = z1.device 
-    representations = torch.cat([z1, z2], dim=0)
-    similarity_matrix = F.cosine_similarity(representations.unsqueeze(1), representations.unsqueeze(0), dim=-1)
-    l_pos = torch.diag(similarity_matrix, N)
-    r_pos = torch.diag(similarity_matrix, -N)
-    positives = torch.cat([l_pos, r_pos]).view(2 * N, 1)
-    diag = torch.eye(2*N, dtype=torch.bool, device=device)
-    diag[N:,:N] = diag[:N,N:] = diag[:N,:N]
-
-    negatives = similarity_matrix[~diag].view(2*N, -1)
-
-    logits = torch.cat([positives, negatives], dim=1)
-    logits /= temperature
-
-    labels = torch.zeros(2*N, device=device, dtype=torch.int64)
-
-    loss = F.cross_entropy(logits, labels, reduction='sum')
-    return loss / (2 * N)
