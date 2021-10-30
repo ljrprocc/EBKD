@@ -21,7 +21,7 @@ from datasets.svhn import get_svhn_dataloaders, get_svhn_dataloaders_sample
 from helper.util import adjust_learning_rate, TVLoss
 from helper.util_gen import get_replay_buffer, getDirichl, add_dict
 
-from helper.gen_loops import train_generator, train_joint
+from helper.gen_loops import train_generator, train_joint, train_z_G
 from helper.pretrain import init
 
 # DDP setting
@@ -60,7 +60,7 @@ def parse_option():
     # model
     parser.add_argument('--joint', action="store_true", help='Flag for whether adding l_c term when training EBM.')
 
-    parser.add_argument('--energy', default='mcmc', type=str, help='Sampling method to update EBM.')
+    parser.add_argument('--sampling', default='mcmc', type=str, help='Sampling method to update EBM.')
     parser.add_argument('--lmda_ebm', default=0.7, type=float, help='Hyperparameter for update EBM.')
     parser.add_argument('--lmda_l2', default=0.01, type=float, help='Hyperparameter for l2-norm for generated loss')
     parser.add_argument('--lmda_tv', default=2.5e-3, type=float, help='Hyperparameter for total variation loss.')
@@ -172,6 +172,23 @@ def setup(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 
+def set_optimizers(opt, model_score, model_G=None, config_type='jem'):
+    if config_type == 'jem':
+        optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate_ebm, betas=[0.9, 0.999],  weight_decay=opt.weight_decay_ebm)
+        return optimizer
+    elif config_type == 'gz':
+        assert model_G is not None, 'Must set generator in latent code mode.'
+        optE = torch.optim.Adam(model_score.parameters(), lr=opt.e_lr, weight_decay=opt.e_decay, betas=(opt.e_beta1, opt.e_beta2))
+        optG = torch.optim.Adam(model_G.parameters(), lr=opt.g_lr, weight_decay=opt.g_decay, betas=(opt.g_beta1, opt.g_beta2))
+
+        lr_scheduleE = torch.optim.lr_scheduler.ExponentialLR(optE, opt.e_gamma)
+        lr_scheduleG = torch.optim.lr_scheduler.ExponentialLR(optG, opt.g_gamma)
+        return optE, optG, lr_scheduleE, lr_scheduleG
+    else:
+        raise NotImplementedError('Not implemented at type {}'.format(config_type))
+
+
+
 def main_function(gpu, opt):
     
     ddp = opt.dataset == 'imagenet'
@@ -209,7 +226,17 @@ def main_function(gpu, opt):
         model_score = model_dict[opt.model_s](args=opt, num_classes=opt.n_cls)
     else:
         model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm, act=opt.act, multiscale=opt.multiscale)
+    config_type = opt.config.split('/')[-1].split('.')[0]
+    if config_type == 'gz':
+        model_score = model_dict['ZE'](args=opt, num_classes=opt.n_cls)
+        netG = model_dict['ZGc'](args=opt)
     model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
+    
+    
+    optimizer = set_optimizers(opt, model_score=model_score, model_G=netG, config_type=config_type)
+    if config_type == 'gz':
+        optG, optE, lrG, lrE = optimizer
+        optimizer_list = [optG, optE]
     
     buffer, _ = get_replay_buffer(opt, model=model_score)
     if opt.joint:
@@ -240,15 +267,16 @@ def main_function(gpu, opt):
         cudnns.enabled = True
     # model = model_dict['Score'](model=model, n_cls=opt.n_cls)
     # print(model)
-    optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate_ebm, betas=[0.9, 0.999],  weight_decay=opt.weight_decay_ebm)
+    if config_type == 'gz':
+        model_list = [model_score, netG]
+        criterion = torch.nn.MSELoss(reduction='sum')
+
     if opt.joint:
         model_list = [model, model_stu, model_score]
     else:
         model_list = [model_score]
     # optimizer = nn.DataParallel(optimizer)
-    criterion = TVLoss()
-    
-
+    # criterion = TVLoss()
 
     # tensorboard
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
@@ -264,8 +292,11 @@ def main_function(gpu, opt):
             for param_group in optimizer.param_groups:
                 new_lr = param_group['lr'] * opt.lr_decay_rate_ebm
                 param_group['lr'] = new_lr
-
-        adjust_learning_rate(epoch, opt, optimizer)
+        if config_type == 'gz':
+            lrE.step(epoch=epoch)
+            lrG.step(epoch=epoch)
+        else:
+            adjust_learning_rate(epoch, opt, optimizer)
         if (not ddp) or gpu == 0:
             print("==> training...")
 
@@ -275,25 +306,37 @@ def main_function(gpu, opt):
             loader, loader_lb = train_loader
             loader.sampler.set_epoch(epoch)
             # loader_lb.sampler.set_epoch(epoch)
-        if opt.joint:
-            train_loss = train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
+        if config_type == 'jem':
+            if opt.joint:
+                train_loss = train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
+            else:
+                train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger, local_rank=gpu)
         else:
-            train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger, local_rank=gpu)
+            train_loss = train_z_G(epoch, train_loader, model_list, criterion, optimizer_list, opt, logger, local_rank=gpu)
+        
         time2 = time.time()
         logger.log_value('train_loss', train_loss, epoch)
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
         
         # save the best model
         # print('Saving Sampling Buffer')
-        print('Sample Buffer:')
-        print('length: %d' % (len(buffer)))
+        # print('Sample Buffer:')
+        # print('length: %d' % (len(buffer)))
         
         if epoch % opt.save_freq == 0:
-            print('Writing valid samples')
-            ckpt_dict = {
-                "model_state_dict": model_score.state_dict(),
-                "replay_buffer": buffer
-            }
+            print('***********Writing valid samples**************')
+            if config_type == 'jem':
+                ckpt_dict = {
+                    "model_state_dict": model_score.state_dict(),
+                    "replay_buffer": buffer
+                }
+            else:
+                ckpt_dict = {
+                    "model_state_dict": model_score.state_dict(),
+                    "G_state_dict": netG.state_dict(),
+                    "optG": optG.state_dict(),
+                    "optE": optE.state_dict()
+                }
             if gpu == 0:
                 torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_epoch_{epoch}.pts'.format(epoch=epoch)))
 

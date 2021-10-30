@@ -11,6 +11,7 @@ from .ShuffleNetv1 import ShuffleV1
 from .ShuffleNetv2 import ShuffleV2
 from .generator import CCF
 from .energy import ImagenetModel,ResNetModel,CelebAModel,MNISTModel
+from .vgenerator import _netG, _netE, _netG_cifar
 from .cvae import ConditionalVAE, VanillaVAE, CVAEEncoder, CVAEDecoder
 
 model_dict = {
@@ -46,6 +47,9 @@ model_dict = {
     'ShuffleV1': ShuffleV1,
     'ShuffleV2': ShuffleV2,
     'Energy': ResNetModel,
+    'ZG': _netG,
+    'ZE': _netE,
+    'ZGc': _netG_cifar,
     # 'Score': netE,
     'Gen': CCF,
     'vae': VanillaVAE,

@@ -143,8 +143,7 @@ def langevin_at_x(opts, device=None):
                 # plot('{}/debug_{}.png'.format(opts.save_folder, k))
                 # exit(-1)
             x_k_pre = x_k.detach()
-            
-            
+                    
         f.train()
         
         final_samples = x_k.detach()
@@ -213,15 +212,15 @@ def freshh(model, opt, device, replay_buffer=None, save=True):
 
 
 
-def langevin_at_z(args, device=None, post=False):
+def langevin_at_z(args, device=None):
     def sample_p_0(n=args.batch_size, sig=args.e_init_sig):
         return sig * torch.randn(*[n, args.nz, 1, 1]).to(device)
 
-    def sample_langevin_prior_z(netE, z, verbose=False):
+    def sample_langevin_prior_z(netE, z, verbose=False, y=None):
         z = z.clone().detach()
         z.requires_grad = True
         for i in range(args.g_steps):
-            en = netE(z)
+            en = netE(z, y=y)
             z_grad = torch.autograd.grad(en.sum(), z)[0]
 
             z.data = z.data - 0.5 * args.step_size * args.step_size * (z_grad + 1.0 / (args.e_prior_sig * args.e_prior_sig) * z.data)
@@ -235,7 +234,7 @@ def langevin_at_z(args, device=None, post=False):
 
         return z.detach(), z_grad_norm
 
-    def sample_langevin_post_z(netE, z, args, netG, x, verbose=False):
+    def sample_langevin_post_z(netE, z, args, netG, x, verbose=False, y=None):
 
         mse = nn.MSELoss(reduction='sum')
 
@@ -246,7 +245,7 @@ def langevin_at_z(args, device=None, post=False):
             g_log_lkhd = 1.0 / (2.0 * args.g_llhd_sigma * args.g_llhd_sigma) * mse(x_hat, x)
             z_grad_g = torch.autograd.grad(g_log_lkhd, z)[0]
 
-            en = netE(z)
+            en = netE(z, y=y)
             z_grad_e = torch.autograd.grad(en.sum(), z)[0]
 
             z.data = z.data - 0.5 * args.step_size * args.step_size * (z_grad_g + z_grad_e + 1.0 / (args.e_prior_sig * args.e_prior_sig) * z.data)

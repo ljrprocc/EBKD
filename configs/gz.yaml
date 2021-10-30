@@ -1,0 +1,29 @@
+# Config file for training latent langevin dynamics
+nz: 100
+nc: 3
+nez: 1
+ngf: 128
+ndf: 1000
+
+e_l_steps: 80
+e_l_step_size: 0.4
+e_activation: swish
+g_activation: leaky
+g_l_steps: 40
+g_l_step_size: 0.1
+e_lr: 0.00002
+g_lr: 0.0001
+g_batchnorm: False
+e_sn: False
+
+e_max_norm: 100
+g_max_norm: 100
+
+e_decay: 0
+g_decay: 0
+
+e_gamma: 0.998
+g_gamma: 0.998
+
+g_beta1: 0.5
+g_beta2: 0.999

@@ -14,8 +14,10 @@ sys.path.append('..')
 from datasets.cifar100 import CIFAR100Gen
  
 from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras, inception_score, TVLoss
-from .util_gen import get_replay_buffer, update_theta, getDirichl 
-from .util_gen import get_sample_q, cond_samples, diag_normal_NLL, diag_standard_normal_NLL
+from .util_gen import update_theta, getDirichl 
+from .util_gen import get_sample_q, cond_samples
+from torch.autograd import Variable
+from .sampling import langevin_at_z
 
 def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger):
     '''One epoch for training generator with teacher'''
@@ -267,6 +269,90 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
                 plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q_y)
 
     return losses.avg
+
+def train_z_G(epoch, train_loader, model_list, criterion, optimizer, opt, logger, local_rank=None, device=None):
+    model_G, model_E = model_list
+    optG, optE = optimizer
+
+    model_G.train()
+    model_E.train()
+    train_loader, train_labeled_loader = train_loader
+    normalize = lambda x: ((x.float() / 255.) - .5) * 2.
+    plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
+
+    # Future for combining with function update_theta
+    for i, (x, y) in enumerate(train_loader, 0):
+
+            x = normalize(x).to(device)
+            batch_size = x.shape[0]
+            sample_langevin_prior_z, sample_langevin_post_z, sample_p_0 = langevin_at_z(opt, device=device)
+
+            # Initialize chains
+            z_g_0 = sample_p_0(n=batch_size)
+            z_e_0 = sample_p_0(n=batch_size)
+
+            # Langevin posterior and prior
+            z_g_k = sample_langevin_post_z(netE=model_E, z=Variable(z_g_0), args=opt, netG=model_G, y=y)
+            z_e_k = sample_langevin_prior_z(netE=model_E, z=Variable(z_e_0), args=opt, y=y)
+
+            # Learn generator
+            optG.zero_grad()
+            x_hat = model_G(z_g_k.detach())
+            loss_g = criterion(x_hat, x) / batch_size
+            loss_g.backward()
+            # grad_norm_g = get_grad_norm(net.netG.parameters())
+            # if args.g_is_grad_clamp:
+            #    torch.nn.utils.clip_grad_norm(net.netG.parameters(), opt.g_max_norm)
+            optG.step()
+
+            # Learn prior EBM
+            optE.zero_grad()
+            en_neg = model_E(z_e_k.detach()).mean() # TODO(nijkamp): why mean() here and in Langevin sum() over energy? constant is absorbed into Adam adaptive lr
+            en_pos = model_E(z_g_k.detach()).mean()
+            loss_e = en_pos - en_neg
+            loss_e.backward()
+            # grad_norm_e = get_grad_norm(net.netE.parameters())
+            # if args.e_is_grad_clamp:
+            #    torch.nn.utils.clip_grad_norm_(net.netE.parameters(), args.e_max_norm)
+            optE.step()
+            global_iter = epoch * len(train_loader) + i
+            # Printout
+            if i % opt.print_freq == 0:
+                with torch.no_grad():
+                    logger.log_value('l_g', loss_g, global_iter)
+                    logger.log_value('l_e', loss_e, global_iter)
+                    logger.log_value('z_e_k', z_e_k.mean(), global_iter)
+                    logger.log_value('z_g_k', z_g_k.mean(), global_iter)
+                    x_0 = model_G(z_e_0)
+                    x_k = model_G(z_e_k)
+                    plot('{}/x_k_{}_{:>06d}.png'.format(opt.save_dir, epoch, i), x_k)
+                    plot('{}/x_0_{}_{:>06d}.png'.format(opt.save_dir, epoch, i), x_0)
+                                  
+                    # if opt.plot_uncond:
+                    #     y = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(input.device)
+                    #     z_e_k = sample_langevin_prior_z(netE=model_E, z=Variable(z_e_0), args=opt, y=y)
+                    #     # x_q, _ = sample_q(model, buffer, y=y_q)
+                    #     # plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, i), x_q)
+                    # if opt.plot_cond:  # generate class-conditional samples
+                    #     y = torch.arange(0, opt.n_cls).to(input.device)
+                        # print(y.shape)
+                        # x_q_y, _ = sample_q(model, buffer, y=y)
+                        # plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, i), x_q_y)
+
+                    en_neg_2 = model_E(z_e_k).mean()
+                    en_pos_2 = model_E(z_g_k).mean()
+
+                    prior_moments = '[{:8.2f}, {:8.2f}, {:8.2f}]'.format(z_e_k.mean(), z_e_k.std(), z_e_k.abs().max())
+                    posterior_moments = '[{:8.2f}, {:8.2f}, {:8.2f}]'.format(z_g_k.mean(), z_g_k.std(), z_g_k.abs().max())
+                    str = '{:5d}/{:5d} {:5d}/{:5d} '.format(epoch, opt.epochs, i, len(train_loader)) + 'loss_g={:8.3f}, '.format(loss_g) +'loss_e={:8.3f}, '.format(loss_e) +'en_pos=[{:9.4f}, {:9.4f}, {:9.4f}], '.format(en_pos, en_pos_2, en_pos_2-en_pos) +'en_neg=[{:9.4f}, {:9.4f}, {:9.4f}], '.format(en_neg, en_neg_2, en_neg_2-en_neg) +'|z_g_0|={:6.2f}, '.format(z_g_0.view(batch_size, -1).norm(dim=1).mean()) + '|z_g_k|={:6.2f}, '.format(z_g_k.view(batch_size, -1).norm(dim=1).mean()) +'|z_e_0|={:6.2f}, '.format(z_e_0.view(batch_size, -1).norm(dim=1).mean()) +'|z_e_k|={:6.2f}, '.format(z_e_k.view(batch_size, -1).norm(dim=1).mean()) + 'z_e_disp={:6.2f}, '.format((z_e_k-z_e_0).view(batch_size, -1).norm(dim=1).mean()) +'z_g_disp={:6.2f}, '.format((z_g_k-z_g_0).view(batch_size, -1).norm(dim=1).mean()) + 'x_e_disp={:6.2f}, '.format((x_k-x_0).view(batch_size, -1).norm(dim=1).mean()) +'prior_moments={}, '.format(prior_moments) + 'posterior_moments={}, '.format(posterior_moments)
+
+                    
+
+                    # logger.info()
+
+
+    
+
 
 def validate_G(model, replay_buffer, opt, eval_loader=None):
     """validation for generation stage. Also returns inception score(IS), Fischer Inception Distance(FID). Designed for further inference."""
