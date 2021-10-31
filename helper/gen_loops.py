@@ -294,12 +294,12 @@ def train_z_G(epoch, train_loader, model_list, criterion, optimizer, opt, logger
             # print(x.device, z_g_0.device, z_e_0.device)
             
             # Langevin posterior and prior
-            z_g_k= sample_langevin_post_z(netE=model_E, z=Variable(z_g_0), x=x, args=opt, netG=model_G, y=y)
-            z_e_k = sample_langevin_prior_z(netE=model_E, z=Variable(z_e_0), args=opt, y=y)
+            z_g_k, _, _= sample_langevin_post_z(netE=model_E, z=Variable(z_g_0), x=x, args=opt, netG=model_G, y=y)
+            z_e_k, _ = sample_langevin_prior_z(netE=model_E, z=Variable(z_e_0), args=opt, y=y)
 
             # Learn generator
             optG.zero_grad()
-            x_hat = model_G(z_g_k[0].detach())
+            x_hat = model_G(z_g_k.detach())
             loss_g = criterion(x_hat, x) / batch_size
             loss_g.backward()
             # grad_norm_g = get_grad_norm(net.netG.parameters())
@@ -309,8 +309,8 @@ def train_z_G(epoch, train_loader, model_list, criterion, optimizer, opt, logger
 
             # Learn prior EBM
             optE.zero_grad()
-            en_neg = model_E(z_e_k[0].detach()).mean() # TODO(nijkamp): why mean() here and in Langevin sum() over energy? constant is absorbed into Adam adaptive lr
-            en_pos = model_E(z_g_k[0].detach()).mean()
+            en_neg = model_E(z_e_k.detach())[0].mean() # TODO(nijkamp): why mean() here and in Langevin sum() over energy? constant is absorbed into Adam adaptive lr
+            en_pos = model_E(z_g_k.detach())[0].mean()
             loss_e = en_pos - en_neg
             loss_e.backward()
             # grad_norm_e = get_grad_norm(net.netE.parameters())
@@ -341,15 +341,15 @@ def train_z_G(epoch, train_loader, model_list, criterion, optimizer, opt, logger
                         # x_q_y, _ = sample_q(model, buffer, y=y)
                         # plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, i), x_q_y)
 
-                    en_neg_2 = model_E(z_e_k).mean()
-                    en_pos_2 = model_E(z_g_k).mean()
+                    en_neg_2 = model_E(z_e_k)[0].mean()
+                    en_pos_2 = model_E(z_g_k)[0].mean()
 
                     prior_moments = '[{:8.2f}, {:8.2f}, {:8.2f}]'.format(z_e_k.mean(), z_e_k.std(), z_e_k.abs().max())
                     posterior_moments = '[{:8.2f}, {:8.2f}, {:8.2f}]'.format(z_g_k.mean(), z_g_k.std(), z_g_k.abs().max())
                     str = '{:5d}/{:5d} {:5d}/{:5d} '.format(epoch, opt.epochs, i, len(train_loader)) + 'loss_g={:8.3f}, '.format(loss_g) +'loss_e={:8.3f}, '.format(loss_e) +'en_pos=[{:9.4f}, {:9.4f}, {:9.4f}], '.format(en_pos, en_pos_2, en_pos_2-en_pos) +'en_neg=[{:9.4f}, {:9.4f}, {:9.4f}], '.format(en_neg, en_neg_2, en_neg_2-en_neg) +'|z_g_0|={:6.2f}, '.format(z_g_0.view(batch_size, -1).norm(dim=1).mean()) + '|z_g_k|={:6.2f}, '.format(z_g_k.view(batch_size, -1).norm(dim=1).mean()) +'|z_e_0|={:6.2f}, '.format(z_e_0.view(batch_size, -1).norm(dim=1).mean()) +'|z_e_k|={:6.2f}, '.format(z_e_k.view(batch_size, -1).norm(dim=1).mean()) + 'z_e_disp={:6.2f}, '.format((z_e_k-z_e_0).view(batch_size, -1).norm(dim=1).mean()) +'z_g_disp={:6.2f}, '.format((z_g_k-z_g_0).view(batch_size, -1).norm(dim=1).mean()) + 'x_e_disp={:6.2f}, '.format((x_k-x_0).view(batch_size, -1).norm(dim=1).mean()) +'prior_moments={}, '.format(prior_moments) + 'posterior_moments={}, '.format(posterior_moments)
 
                     
-
+    return loss_e
                     # logger.info()
 
 
