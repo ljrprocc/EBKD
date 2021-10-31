@@ -14,4 +14,4 @@
 
 # CUDA_VISIBLE_DEVICES=2 python train_ebm.py --model_s wrn_22_10 --trial cor_multi_5 --save_freq 5 --epochs 150 --lr_decay_epochs 50,100 --plot_cond --learning_rate 0.0001 --batch_size 128  --energy mcmc --warmup_iters 1000 --lmda_p_x_y 1. --lmda_p_x 0 --num_workers 4 --data_noise 0.03 --print_freq 100 --use_py --reinit_freq 0.05 --multiscale
 
-CUDA_VISIBLE_DEVICES=2 python train_ebm.py --config ./configs/gz.yaml --trial cor_z --save_freq 5 --epochs 150 --batch_size 128  --energy mcmc --warmup_iters 1000 --num_workers 4 --data_noise 0.03 --print_freq 100 --use_py --reinit_freq 0.05
+python train_ebm.py --config ./configs/gz.yaml --trial cor_z --save_freq 5 --epochs 150 --batch_size 128  --warmup_iters 1000 --num_workers 4 --print_freq 100 --gpu 1

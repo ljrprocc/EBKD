@@ -15,9 +15,9 @@ from datasets.cifar100 import CIFAR100Gen
  
 from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras, inception_score, TVLoss
 from .util_gen import update_theta, getDirichl 
-from .util_gen import get_sample_q, cond_samples
+from .util_gen import cond_samples
 from torch.autograd import Variable
-from .sampling import langevin_at_z
+from .sampling import langevin_at_z, langevin_at_x
 
 def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger):
     '''One epoch for training generator with teacher'''
@@ -43,7 +43,7 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
     plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
 
     end = time.time()
-    sample_q = get_sample_q(opt)
+    sample_q = langevin_at_x(opt)
     correct = 0
     total_length = 0
     for idx, data in enumerate(train_loader):
@@ -171,7 +171,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
     plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
 
     end = time.time()
-    sample_q = get_sample_q(opt)
+    sample_q = langevin_at_x(opt)
     correct = 0
     total_length = 0
     for idx, data in enumerate(train_loader):
@@ -271,7 +271,7 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
     return losses.avg
 
 def train_z_G(epoch, train_loader, model_list, criterion, optimizer, opt, logger, local_rank=None, device=None):
-    model_G, model_E = model_list
+    model_E, model_G = model_list
     optG, optE = optimizer
 
     model_G.train()
@@ -285,19 +285,21 @@ def train_z_G(epoch, train_loader, model_list, criterion, optimizer, opt, logger
 
             x = normalize(x).to(device)
             batch_size = x.shape[0]
+            y = y.to(device)
             sample_langevin_prior_z, sample_langevin_post_z, sample_p_0 = langevin_at_z(opt, device=device)
-
+            
             # Initialize chains
             z_g_0 = sample_p_0(n=batch_size)
             z_e_0 = sample_p_0(n=batch_size)
-
+            # print(x.device, z_g_0.device, z_e_0.device)
+            
             # Langevin posterior and prior
-            z_g_k = sample_langevin_post_z(netE=model_E, z=Variable(z_g_0), args=opt, netG=model_G, y=y)
+            z_g_k= sample_langevin_post_z(netE=model_E, z=Variable(z_g_0), x=x, args=opt, netG=model_G, y=y)
             z_e_k = sample_langevin_prior_z(netE=model_E, z=Variable(z_e_0), args=opt, y=y)
 
             # Learn generator
             optG.zero_grad()
-            x_hat = model_G(z_g_k.detach())
+            x_hat = model_G(z_g_k[0].detach())
             loss_g = criterion(x_hat, x) / batch_size
             loss_g.backward()
             # grad_norm_g = get_grad_norm(net.netG.parameters())
@@ -307,8 +309,8 @@ def train_z_G(epoch, train_loader, model_list, criterion, optimizer, opt, logger
 
             # Learn prior EBM
             optE.zero_grad()
-            en_neg = model_E(z_e_k.detach()).mean() # TODO(nijkamp): why mean() here and in Langevin sum() over energy? constant is absorbed into Adam adaptive lr
-            en_pos = model_E(z_g_k.detach()).mean()
+            en_neg = model_E(z_e_k[0].detach()).mean() # TODO(nijkamp): why mean() here and in Langevin sum() over energy? constant is absorbed into Adam adaptive lr
+            en_pos = model_E(z_g_k[0].detach()).mean()
             loss_e = en_pos - en_neg
             loss_e.backward()
             # grad_norm_e = get_grad_norm(net.netE.parameters())

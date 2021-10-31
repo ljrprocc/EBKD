@@ -33,7 +33,7 @@ def weights_init_xavier(m):
         m.bias.data.fill_(0)
 
 def get_activation(name, args):
-    return {'gelu': GELU(), 'lrelu': nn.LeakyReLU(args.e_activation_leak), 'mish': Mish(), 'swish': Swish()}[name]
+    return {'gelu': GELU(), 'leaky': nn.LeakyReLU(args.e_activation_leak), 'mish': Mish(), 'swish': Swish()}[name]
 
 class _netG(nn.Module):
     def __init__(self, args):
@@ -94,10 +94,11 @@ class _netE(nn.Module):
         self.num_classes = num_classes
 
     def forward(self, z, is_feat=False):
+        # print(z.device, next(self.parameters()).device)
         if is_feat:
-            return z, self.ebm(z.squeeze()).view(-1, self.args.nez, 1, 1)
+            return z, self.ebm(z.squeeze()).view(-1, self.num_classes)
         else:
-            return self.ebm(z.squeeze()).view(-1, self.args.nez, 1, 1)
+            return self.ebm(z.squeeze()).view(-1, self.num_classes)
 
 class _netG_cifar(nn.Module):
     def __init__(self, args):

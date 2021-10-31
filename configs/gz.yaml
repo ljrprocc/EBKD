@@ -4,6 +4,9 @@ nc: 3
 nez: 1
 ngf: 128
 ndf: 1000
+model_s: ZGc
+data_noise: 0.001
+e_activation_leak: 0.2
 
 e_l_steps: 80
 e_l_step_size: 0.4
@@ -15,6 +18,7 @@ e_lr: 0.00002
 g_lr: 0.0001
 g_batchnorm: False
 e_sn: False
+g_llhd_sigma: 0.03
 
 e_max_norm: 100
 g_max_norm: 100
@@ -27,3 +31,6 @@ g_gamma: 0.998
 
 g_beta1: 0.5
 g_beta2: 0.999
+
+e_beta1: 0.5
+e_beta2: 0.999

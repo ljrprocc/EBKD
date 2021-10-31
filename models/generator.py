@@ -48,6 +48,7 @@ class FF(nn.Module):
     def classify(self, x, is_feat=False, preact=False):
         if is_feat:
             feats, penult_z = self.f(x, is_feat=is_feat)
+            # print(penult_z.shape)
             # print(penult_z.requires_grad)
             # print(self.f(x, is_feat=is_feat, preact=preact))
             return feats, penult_z

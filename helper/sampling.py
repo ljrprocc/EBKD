@@ -213,47 +213,53 @@ def freshh(model, opt, device, replay_buffer=None, save=True):
 
 
 def langevin_at_z(args, device=None):
-    def sample_p_0(n=args.batch_size, sig=args.e_init_sig):
+    def sample_p_0(n=args.batch_size, sig=1):
         return sig * torch.randn(*[n, args.nz, 1, 1]).to(device)
 
-    def sample_langevin_prior_z(netE, z, verbose=False, y=None):
+    def sample_langevin_prior_z(z, netE, args, verbose=False, y=None):
         z = z.clone().detach()
         z.requires_grad = True
-        for i in range(args.g_steps):
-            en = netE(z, y=y)
+        for i in range(args.e_l_steps):
+            en = netE(z,y=y)[0]
             z_grad = torch.autograd.grad(en.sum(), z)[0]
 
-            z.data = z.data - 0.5 * args.step_size * args.step_size * (z_grad + 1.0 / (args.e_prior_sig * args.e_prior_sig) * z.data)
-            if args.e_l_with_noise:
-                z.data += args.step_size * torch.randn_like(z).data
+            z.data = z.data - 0.5 * args.e_l_step_size * args.e_l_step_size * (z_grad + 1.0 / (1 * 1) * z.data)
+            # if args.e_l_with_noise:
+            z.data += args.e_l_step_size * torch.randn_like(z).data
 
-            if (i % 5 == 0 or i == args.g_steps - 1) and verbose:
+            if (i % 5 == 0 or i == args.e_l_steps - 1) and verbose:
                 print('Langevin prior {:3d}/{:3d}: energy={:8.3f}'.format(i+1, args.e_l_steps, en.sum().item()))
 
             z_grad_norm = z_grad.view(args.batch_size, -1).norm(dim=1).mean()
 
         return z.detach(), z_grad_norm
 
-    def sample_langevin_post_z(netE, z, args, netG, x, verbose=False, y=None):
+    def sample_langevin_post_z(z, x, netG, netE, args, verbose=False, y=None):
 
-        mse = nn.MSELoss(reduction='sum')
-
+        mse = nn.MSELoss(reduction='sum').to(device)
+        # print(z.device, x.device)
         z = z.clone().detach()
         z.requires_grad = True
-        for i in range(args.g_steps):
+        for i in range(args.g_l_steps):
             x_hat = netG(z)
+            # print(x_hat.shape)
+            # exit(-1)
             g_log_lkhd = 1.0 / (2.0 * args.g_llhd_sigma * args.g_llhd_sigma) * mse(x_hat, x)
+            
             z_grad_g = torch.autograd.grad(g_log_lkhd, z)[0]
-
-            en = netE(z, y=y)
+            # exit(-1)
+            # print(netE)
+            en = netE(z, y=y)[0]
+            # print(en.device)
+            # exit(-1)
             z_grad_e = torch.autograd.grad(en.sum(), z)[0]
 
-            z.data = z.data - 0.5 * args.step_size * args.step_size * (z_grad_g + z_grad_e + 1.0 / (args.e_prior_sig * args.e_prior_sig) * z.data)
-            if args.g_l_with_noise:
-                z.data += args.step_size * torch.randn_like(z).data
+            z.data = z.data - 0.5 * args.g_l_step_size * args.g_l_step_size * (z_grad_g + z_grad_e + 1.0 / (1 * 1) * z.data)
+            # if args.g_l_with_noise:
+            z.data += args.g_l_step_size * torch.randn_like(z).data
 
-            if (i % 5 == 0 or i == args.g_steps - 1) and verbose:
-                print('Langevin posterior {:3d}/{:3d}: MSE={:8.3f}'.format(i+1, args.g_steps, g_log_lkhd.item()))
+            if (i % 5 == 0 or i == args.g_l_steps - 1) and verbose:
+                print('Langevin posterior {:3d}/{:3d}: MSE={:8.3f}'.format(i+1, args.g_l_steps, g_log_lkhd.item()))
 
             z_grad_g_grad_norm = z_grad_g.view(args.batch_size, -1).norm(dim=1).mean()
             z_grad_e_grad_norm = z_grad_e.view(args.batch_size, -1).norm(dim=1).mean()

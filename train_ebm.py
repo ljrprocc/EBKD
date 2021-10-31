@@ -19,7 +19,7 @@ from datasets.imagenet import get_imagenet_dataloader, get_dataloader_sample
 from datasets.svhn import get_svhn_dataloaders, get_svhn_dataloaders_sample
 
 from helper.util import adjust_learning_rate, TVLoss
-from helper.util_gen import get_replay_buffer, getDirichl, add_dict
+from helper.util_gen import getDirichl, add_dict
 
 from helper.gen_loops import train_generator, train_joint, train_z_G
 from helper.pretrain import init
@@ -80,6 +80,8 @@ def parse_option():
     parser.add_argument('--self_attn', action="store_true")
     parser.add_argument('--multiscale', action="store_true")
     parser.add_argument('--augment', action="store_true")
+    # CUDA options
+    parser.add_argument('--gpu', default=0, type=int, help='Local device.')
 
     # DDP options
     parser.add_argument('--local_rank', default=-1, type=int, help='node rank for distributed training')
@@ -94,8 +96,8 @@ def parse_option():
     opt.spec_norm = False
 
     # set different learning rate from these 4 models
-    if opt.model in ['MobileNetV2', 'ShuffleV1', 'ShuffleV2']:
-        opt.learning_rate = 0.01
+    # if opt.model in ['MobileNetV2', 'ShuffleV1', 'ShuffleV2']:
+    #     opt.learning_rate = 0.01
     opt.df_folder = '/data/lijingru/img_sample_eval_10000/'
     # set the path according to the environment
     if hostname.startswith('visiongpu'):
@@ -109,12 +111,18 @@ def parse_option():
     opt.lr_decay_epochs_ebm = list([])
     for it in iterations:
         opt.lr_decay_epochs_ebm.append(int(it))
+    config_type = opt.config.split('/')[-1].split('.')[0]
 
     # opt.model_t = get_teacher_name(opt.path_t)
     if opt.joint:
         opt.model_name = '{}_T:{}_S:{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_k_{}'.format(opt.model_s, opt.model, opt.model_stu, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.lc_K)
+    elif config_type == 'gz':
+        opt.model_name = '{}_{}_ngf_{}_ndf_{}_elr_{}_glr_{}_trial_{}'.format(opt.dataset, opt.model_s, opt.ngf, opt.ndf, opt.e_lr, opt.g_lr, opt.trial)
     else:
-        opt.model_name = '{}_{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}'.format(opt.dataset, opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.lc_K)
+        opt.model_name = '{}_{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}'.format(opt.dataset, opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.trial)
+
+    
+    
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
     if not os.path.isdir(opt.tb_folder):
@@ -201,6 +209,7 @@ def main_function(gpu, opt):
     # print(local_rank, gpu)
     # exit(-1)
     opt.datafree = False
+    opt.device = 'cuda:{}'.format(opt.gpu)
     # 
     if opt.dataset == 'cifar100' or opt.dataset == 'cifar10':
         train_loader, val_loader = get_cifar100_dataloaders(opt, batch_size=opt.batch_size, num_workers=opt.num_workers, use_subdataset=True)
@@ -217,19 +226,20 @@ def main_function(gpu, opt):
     # print(gpu)
     # model
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
-    
-    
-    if opt.model_s == 'resnet28x10':
-        d, w = opt.model_s.split('x')[0][-2:], opt.model_s.split('x')[1]
-        model_score = model_dict[opt.model_s](depth=int(d), widen_factor=int(w), num_classes=opt.n_cls, norm=opt.norm)
-    elif opt.model_s == 'Energy':
-        model_score = model_dict[opt.model_s](args=opt, num_classes=opt.n_cls)
-    else:
-        model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm, act=opt.act, multiscale=opt.multiscale)
+
     config_type = opt.config.split('/')[-1].split('.')[0]
     if config_type == 'gz':
         model_score = model_dict['ZE'](args=opt, num_classes=opt.n_cls)
         netG = model_dict['ZGc'](args=opt)
+    else:
+        if opt.model_s == 'resnet28x10':
+            d, w = opt.model_s.split('x')[0][-2:], opt.model_s.split('x')[1]
+            model_score = model_dict[opt.model_s](depth=int(d), widen_factor=int(w), num_classes=opt.n_cls, norm=opt.norm)
+        elif opt.model_s == 'Energy':
+            model_score = model_dict[opt.model_s](args=opt, num_classes=opt.n_cls)
+        else:
+            model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm, act=opt.act, multiscale=opt.multiscale)
+    
     model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
     
     
@@ -237,8 +247,9 @@ def main_function(gpu, opt):
     if config_type == 'gz':
         optG, optE, lrG, lrE = optimizer
         optimizer_list = [optG, optE]
-    
-    buffer, _ = get_replay_buffer(opt, model=model_score)
+    else:
+        buffer, _ = get_replay_buffer(opt, model=model_score)
+        opt.y = getDirichl(opt.path_t) if opt.use_py else None
     if opt.joint:
         model = load_teacher(opt.path_t, opt)
         model_stu = model_dict[opt.model_stu](num_classes=opt.n_cls, norm='batch')
@@ -257,11 +268,13 @@ def main_function(gpu, opt):
                 model = DDP(model, device_ids=[local_rank], output_device=local_rank)
 
         else:
-            model_score = model_score.cuda()
+            model_score = model_score.to(opt.device)
+            if config_type == 'gz':
+                netG = netG.to(opt.device)
             # criterion = criterion.cuda()
             if opt.joint:
-                model = model.cuda()
-                model_stu = model_stu.cuda()
+                model = model.to(opt.device)
+                model_stu = model_stu.to(opt.device)
 
         cudnns.benchmark = True
         cudnns.enabled = True
@@ -270,11 +283,11 @@ def main_function(gpu, opt):
     if config_type == 'gz':
         model_list = [model_score, netG]
         criterion = torch.nn.MSELoss(reduction='sum')
-
-    if opt.joint:
-        model_list = [model, model_stu, model_score]
     else:
-        model_list = [model_score]
+        if opt.joint:
+            model_list = [model, model_stu, model_score]
+        else:
+            model_list = [model_score]
     # optimizer = nn.DataParallel(optimizer)
     # criterion = TVLoss()
 
@@ -282,7 +295,7 @@ def main_function(gpu, opt):
     logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
     
-    opt.y = getDirichl(opt.path_t) if opt.use_py else None
+    
     if (not ddp) or gpu == 0:
         print(opt)
     # print(opt.y)
@@ -292,10 +305,7 @@ def main_function(gpu, opt):
             for param_group in optimizer.param_groups:
                 new_lr = param_group['lr'] * opt.lr_decay_rate_ebm
                 param_group['lr'] = new_lr
-        if config_type == 'gz':
-            lrE.step(epoch=epoch)
-            lrG.step(epoch=epoch)
-        else:
+        if config_type == 'jem':
             adjust_learning_rate(epoch, opt, optimizer)
         if (not ddp) or gpu == 0:
             print("==> training...")
@@ -312,7 +322,10 @@ def main_function(gpu, opt):
             else:
                 train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger, local_rank=gpu)
         else:
-            train_loss = train_z_G(epoch, train_loader, model_list, criterion, optimizer_list, opt, logger, local_rank=gpu)
+            
+            train_loss = train_z_G(epoch, train_loader, model_list, criterion, optimizer_list, opt, logger, local_rank=gpu, device=opt.device)
+            lrE.step(epoch=epoch)
+            lrG.step(epoch=epoch)
         
         time2 = time.time()
         logger.log_value('train_loss', train_loss, epoch)
