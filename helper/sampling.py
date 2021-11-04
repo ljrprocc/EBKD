@@ -53,13 +53,16 @@ def init_random(s):
     # print(s)
     return torch.FloatTensor(*s).uniform_(-1, 1)
 
-def get_replay_buffer(opt, model=None, local_rank=None):
+def get_replay_buffer(opt, model=None, local_rank=None, config_type='jem'):
     
     nc = 3
     if opt.dataset == 'cifar100' or opt.dataset == 'cifar10' or opt.dataset == 'svhn':
         im_size = 32
     else:
         im_size = 224
+    if config_type == 'gz':
+        im_size = 1
+        nc = opt.nz
     if not opt.load_buffer_path:
         bs = opt.capcitiy
         # replay_buffer = init_random((bs, opt.latent_dim))
@@ -69,7 +72,7 @@ def get_replay_buffer(opt, model=None, local_rank=None):
         ddp = (opt.dataset == 'imagenet')
         if ddp:
             map_location = {'cuda:%d' % 0: 'cuda:%d' % local_rank}
-        ckpt_dict = torch.load(opt.load_buffer_path)
+        ckpt_dict = torch.load(opt.load_buffer_path, map_location=map_location)
         replay_buffer = ckpt_dict["replay_buffer"]
         if model:
             model.load_state_dict(ckpt_dict["model_state_dict"])
@@ -90,7 +93,7 @@ def langevin_at_x(opts, device=None):
     sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     def sample_p_0(replay_buffer, bs, y=None):
-        if len(replay_buffer) == 0:
+        if len(replay_buffer) == 0 or opts.short_run:
             return init_random((bs, nc, im_size, im_size)), []
             # return init_random((bs, l)), []
         buffer_size = len(replay_buffer) if y is None else len(replay_buffer) // opts.n_cls
@@ -125,11 +128,12 @@ def langevin_at_x(opts, device=None):
         bs = opts.batch_size if y is None else y.size(0)
         # generate initial samples and buffer inds of those samples (if buffer is used)
         init_sample, buffer_inds = sample_p_0(replay_buffer, bs=bs, y=y)
-        x_k = torch.autograd.Variable(init_sample, requires_grad=True)
+        x_k = torch.autograd.Variable(init_sample, requires_grad=True).to(device)
         # sgld
         samples = []
         now_step_size = opts.step_size
         x_k_pre = init_sample
+        # print(x_k.device, y.device)
         for k in range(n_steps):
             f_prime = torch.autograd.grad(f(x_k, y=y)[0].sum(), [x_k], retain_graph=True)[0]
             noise = 0.01 * torch.randn_like(x_k)
@@ -148,7 +152,7 @@ def langevin_at_x(opts, device=None):
         
         final_samples = x_k.detach()
         # update replay buffer
-        if len(replay_buffer) > 0:
+        if len(replay_buffer) > 0 and not opts.short_run:
             replay_buffer[buffer_inds] = final_samples.cpu()
         if y is not None:
             return final_samples, samples
@@ -156,30 +160,6 @@ def langevin_at_x(opts, device=None):
             return final_samples
 
     return sample_q
-
-
-def get_replay_buffer(opt, model=None, local_rank=None):
-    
-    nc = 3
-    if opt.dataset == 'cifar100' or opt.dataset == 'cifar10' or opt.dataset == 'svhn':
-        im_size = 32
-    else:
-        im_size = 224
-    if not opt.load_buffer_path:
-        bs = opt.capcitiy
-        # replay_buffer = init_random((bs, opt.latent_dim))
-        replay_buffer = init_random((bs, nc, im_size, im_size))
-    else:
-        print('Loading replay buffer from local..')
-        ddp = (opt.dataset == 'imagenet')
-        if ddp:
-            map_location = {'cuda:%d' % 0: 'cuda:%d' % local_rank}
-        ckpt_dict = torch.load(opt.load_buffer_path)
-        replay_buffer = ckpt_dict["replay_buffer"]
-        if model:
-            model.load_state_dict(ckpt_dict["model_state_dict"])
-    return replay_buffer, model
-
 
 def freshh(model, opt, device, replay_buffer=None, save=True):
     sample_q, _ = langevin_at_x(opts=opt, device=device)
@@ -213,35 +193,80 @@ def freshh(model, opt, device, replay_buffer=None, save=True):
 
 
 def langevin_at_z(args, device=None):
-    def sample_p_0(n=args.batch_size, sig=1):
-        return sig * torch.randn(*[n, args.nz, 1, 1]).to(device)
+    def sample_p_0(replay_buffer, n=args.batch_size, sig=1, y=None):
+        if len(replay_buffer) == 0 or args.short_run:
+            return sig * torch.randn(*[n, args.nz, 1, 1]).to(device), []
+        buffer_size = len(replay_buffer) if y is None else len(replay_buffer) // args.n_cls
+        # print(replay_buffer)
+        inds = torch.randint(0, buffer_size, (n,))
+        # if cond, convert inds to class conditional inds
+        if y is not None:
+            inds = y.cpu() * buffer_size + inds
+        buffer_samples = replay_buffer[inds]
+        if args.augment:
+            samples = []
+            for sample in buffer_samples:
+                res_samples = augment(args.dataset, sample)
+                samples.append(res_samples)
+            buffer_samples = torch.stack(samples, 0)
+        random_samples = sig * init_random((n, args.nz, 1, 1))
+        # s = (bs, opts.latent_dim)
+        # random_samples = init_random(s)
+        choose_random = (torch.rand(n) < args.reinit_freq).float()[:, None, None, None]
+        samples = choose_random * random_samples + (1 - choose_random) * buffer_samples
+        if device:
+            return samples.to(device), inds
+        else:
+            return samples.cuda(), inds
 
-    def sample_langevin_prior_z(z, netE, args, verbose=False, y=None):
+
+    def sample_langevin_prior_z(replay_buffer_prior, z, buffer_inds, netE, args, verbose=False, y=None):
         z = z.clone().detach()
         z.requires_grad = True
+        samples_z = []
+        z_pre = z.detach()
         for i in range(args.e_l_steps):
             en = netE(z,y=y)[0]
             z_grad = torch.autograd.grad(en.sum(), z)[0]
 
             z.data = z.data - 0.5 * args.e_l_step_size * args.e_l_step_size * (z_grad + 1.0 / (1 * 1) * z.data)
             # if args.e_l_with_noise:
-            z.data += args.e_l_step_size * torch.randn_like(z).data
+            noise = args.e_l_step_size * torch.randn_like(z).data
+            z.data += noise
 
             if (i % 5 == 0 or i == args.e_l_steps - 1) and verbose:
                 print('Langevin prior {:3d}/{:3d}: energy={:8.3f}'.format(i+1, args.e_l_steps, en.sum().item()))
 
             z_grad_norm = z_grad.view(args.batch_size, -1).norm(dim=1).mean()
+            if y is not None:
+                samples_z.append((z, z_pre, noise))
+            z_pre = z.detach()
 
-        return z.detach(), z_grad_norm
+        # update replay buffer
+        final_samples = z.detach()
+        # update replay buffer
+        if not args.short_run:
+            if len(replay_buffer_prior) > 0:
+                replay_buffer_prior[buffer_inds] = final_samples.cpu()
+        if y is not None:
+            return final_samples, samples_z, z_grad_norm
+        else:
+            return final_samples, z_grad_norm
 
-    def sample_langevin_post_z(z, x, netG, netE, args, verbose=False, y=None):
+        
+
+    def sample_langevin_post_z(replay_buffer_post, z, buffer_inds, x, netG, netE, args, verbose=False, y=None):
 
         mse = nn.MSELoss(reduction='sum').to(device)
         # print(z.device, x.device)
         z = z.clone().detach()
         z.requires_grad = True
+        z_pre = z.detach()
+        samples = []
+        netG.eval()
         for i in range(args.g_l_steps):
             x_hat = netG(z)
+            # print(x_hat.min(), x_hat.max(), x.min(), x.max())
             # print(x_hat.shape)
             # exit(-1)
             g_log_lkhd = 1.0 / (2.0 * args.g_llhd_sigma * args.g_llhd_sigma) * mse(x_hat, x)
@@ -249,6 +274,7 @@ def langevin_at_z(args, device=None):
             z_grad_g = torch.autograd.grad(g_log_lkhd, z)[0]
             # exit(-1)
             # print(netE)
+            # print(z_grad_g.mean())
             en = netE(z, y=y)[0]
             # print(en.device)
             # exit(-1)
@@ -256,14 +282,28 @@ def langevin_at_z(args, device=None):
 
             z.data = z.data - 0.5 * args.g_l_step_size * args.g_l_step_size * (z_grad_g + z_grad_e + 1.0 / (1 * 1) * z.data)
             # if args.g_l_with_noise:
-            z.data += args.g_l_step_size * torch.randn_like(z).data
+            noise = args.g_l_step_size * torch.randn_like(z).data
+            z.data += noise
 
             if (i % 5 == 0 or i == args.g_l_steps - 1) and verbose:
                 print('Langevin posterior {:3d}/{:3d}: MSE={:8.3f}'.format(i+1, args.g_l_steps, g_log_lkhd.item()))
 
             z_grad_g_grad_norm = z_grad_g.view(args.batch_size, -1).norm(dim=1).mean()
             z_grad_e_grad_norm = z_grad_e.view(args.batch_size, -1).norm(dim=1).mean()
+            if y is not None:
+                samples.append((z, z_pre, noise))
+            z_pre = z.detach()
 
-        return z.detach(), z_grad_g_grad_norm, z_grad_e_grad_norm
+        final_samples = z.detach()
+        # update replay buffer
+        if not args.short_run:
+            if len(replay_buffer_post) > 0:
+                replay_buffer_post[buffer_inds] = final_samples.cpu()
+        if y is not None:
+            return final_samples, samples, z_grad_g_grad_norm, z_grad_e_grad_norm
+        else:
+            return final_samples, z_grad_g_grad_norm, z_grad_e_grad_norm
+
+        # return z.detach()
 
     return sample_langevin_prior_z, sample_langevin_post_z, sample_p_0

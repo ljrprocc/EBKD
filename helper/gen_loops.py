@@ -19,7 +19,7 @@ from .util_gen import cond_samples
 from torch.autograd import Variable
 from .sampling import langevin_at_z, langevin_at_x
 
-def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger):
+def train_joint(epoch, train_loader, model_list, optimizer, opt, buffer, logger, device=None):
     '''One epoch for training generator with teacher'''
     model_t, model_s, model = model_list
     model.train()
@@ -53,15 +53,15 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
                 param_group['lr'] = lr
         data_time.update(time.time() - end)
         nldata = train_labeled_loader.__next__()
-        x_lab, y_lab = nldata[0].cuda(), nldata[1].cuda()
+        x_lab, y_lab = nldata[0].to(device), nldata[1].to(device)
 
         input, target = data[0], data[1]
         input = input.float()
         # noise = torch.randn(input.shape[0], 100)
         if torch.cuda.is_available():
-            input = input.cuda()
-            target = target.cuda()
-            # noise = noise.cuda()
+            input = input.to(device)
+            target = target.to(device)
+            # noise = noise.to(device)
 
         # ===================forward=====================
         # input_fake, [mu, logvar] = G(noise, target, return_feat=True)
@@ -146,7 +146,7 @@ def train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buff
     return losses.avg
 
 
-def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger, local_rank=None):
+def train_generator(epoch, train_loader, model_list, optimizer, opt, buffer, logger, local_rank=None, device=None):
     '''One epoch for training generator with teacher'''
     '''One epoch for training generator with teacher'''
     # model_t, model = model_list
@@ -185,14 +185,14 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
         data_time.update(time.time() - end)
         nldata = train_labeled_loader.__next__()
         x_lab, y_lab = nldata[0], nldata[1] 
-        x_lab, y_lab = x_lab.cuda(), y_lab.cuda()
+        x_lab, y_lab = x_lab.to(device), y_lab.to(device)
 
         input = input.float()
         # noise = torch.randn(input.shape[0], 100)
         if torch.cuda.is_available():
-            input = input.cuda()
-            target = target.cuda()
-            # noise = noise.cuda()
+            input = input.to(device)
+            target = target.to(device)
+            # noise = noise.to(device)
 
         # ===================forward=====================
         # input_fake, [mu, logvar] = G(noise, target, return_feat=True)
@@ -270,49 +270,62 @@ def train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, 
 
     return losses.avg
 
-def train_z_G(epoch, train_loader, model_list, criterion, optimizer, opt, logger, local_rank=None, device=None):
+def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt, logger, local_rank=None, device=None):
     model_E, model_G = model_list
     optG, optE = optimizer
 
     model_G.train()
     model_E.train()
     train_loader, train_labeled_loader = train_loader
-    normalize = lambda x: ((x.float() / 255.) - .5) * 2.
+    # normalize = lambda x: ((x.float() / 255.) - .5) * 2.
     plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
+    sample_langevin_prior_z, sample_langevin_post_z, sample_p_0 = langevin_at_z(opt, device=device)
+    # z_fixed = sample_p_0()
+    x_fixed = next(iter(train_loader))[0].to(device)
+    prior_buffer, post_buffer = buffer
 
     # Future for combining with function update_theta
     for i, (x, y) in enumerate(train_loader, 0):
-
-            x = normalize(x).to(device)
+            # print(x.max(), x.min())
+            x = x.to(device)
             batch_size = x.shape[0]
             y = y.to(device)
-            sample_langevin_prior_z, sample_langevin_post_z, sample_p_0 = langevin_at_z(opt, device=device)
+            
             
             # Initialize chains
-            z_g_0 = sample_p_0(n=batch_size)
-            z_e_0 = sample_p_0(n=batch_size)
+            z_g_0, g_inds = sample_p_0(post_buffer, n=batch_size)
+            z_e_0, e_inds = sample_p_0(prior_buffer, n=batch_size)
             # print(x.device, z_g_0.device, z_e_0.device)
             
             # Langevin posterior and prior
-            z_g_k, _, _= sample_langevin_post_z(netE=model_E, z=Variable(z_g_0), x=x, args=opt, netG=model_G, y=y)
-            z_e_k, _ = sample_langevin_prior_z(netE=model_E, z=Variable(z_e_0), args=opt, y=y)
+            z_g_k, _, _, _= sample_langevin_post_z(replay_buffer_post=post_buffer, buffer_inds=g_inds, netE=model_E, z=Variable(z_g_0), x=x, args=opt, netG=model_G, y=y, verbose=i<10)
+            z_e_k, _, _ = sample_langevin_prior_z(replay_buffer_prior=prior_buffer, buffer_inds=e_inds, netE=model_E, z=Variable(z_e_0), args=opt, y=y)
 
             # Learn generator
             optG.zero_grad()
             x_hat = model_G(z_g_k.detach())
+            # print(x_hat.min(), x_hat.max(), x.max(), x.min())
+            
             loss_g = criterion(x_hat, x) / batch_size
+            # print(x_hat.mean(), x.mean())
+            # print(loss_g.item())
+            # exit(-1)
             loss_g.backward()
             # grad_norm_g = get_grad_norm(net.netG.parameters())
             # if args.g_is_grad_clamp:
-            #    torch.nn.utils.clip_grad_norm(net.netG.parameters(), opt.g_max_norm)
+            torch.nn.utils.clip_grad_norm(model_G.parameters(), opt.g_max_norm)
             optG.step()
 
             # Learn prior EBM
             optE.zero_grad()
             en_neg = model_E(z_e_k.detach())[0].mean() # TODO(nijkamp): why mean() here and in Langevin sum() over energy? constant is absorbed into Adam adaptive lr
             en_pos = model_E(z_g_k.detach())[0].mean()
+            # print(z_g_k.mean())
             loss_e = en_pos - en_neg
             loss_e.backward()
+            if loss_e.abs().item() > 1e5:
+                print(loss_e.item(), en_pos.item(), en_neg.item())
+                raise ValueError('Not converge.')
             # grad_norm_e = get_grad_norm(net.netE.parameters())
             # if args.e_is_grad_clamp:
             #    torch.nn.utils.clip_grad_norm_(net.netE.parameters(), args.e_max_norm)
@@ -320,14 +333,26 @@ def train_z_G(epoch, train_loader, model_list, criterion, optimizer, opt, logger
             global_iter = epoch * len(train_loader) + i
             # Printout
             if i % opt.print_freq == 0:
+                batch_size_fixed = x_fixed.shape[0]
+                z_g_0p, g_inds0 = sample_p_0(replay_buffer=post_buffer,n=batch_size_fixed)
+                z_e_0p, e_inds0 = sample_p_0(replay_buffer=prior_buffer, n=batch_size_fixed)
+                z_g_kp, _, _= sample_langevin_post_z(replay_buffer_post=post_buffer, buffer_inds=g_inds0, netE=model_E, z=Variable(z_g_0p), x=x_fixed, args=opt, netG=model_G, y=None, verbose=False)
+                z_e_kp, _ = sample_langevin_prior_z(replay_buffer_prior=prior_buffer,netE=model_E, z=Variable(z_e_0p), buffer_inds=e_inds0, args=opt, y=None)
                 with torch.no_grad():
                     logger.log_value('l_g', loss_g, global_iter)
                     logger.log_value('l_e', loss_e, global_iter)
                     logger.log_value('z_e_k', z_e_k.mean(), global_iter)
                     logger.log_value('z_g_k', z_g_k.mean(), global_iter)
-                    x_0 = model_G(z_e_0)
-                    x_k = model_G(z_e_k)
+                    
+                    
+                    x_0 = model_G(z_e_0p)
+                    x_k = model_G(z_e_kp)
+                    x_g_kp = model_G(z_g_kp)
+                    x_0_kp = model_G(z_g_0)
                     plot('{}/x_k_{}_{:>06d}.png'.format(opt.save_dir, epoch, i), x_k)
+                    plot('{}/x_0p_{}_{:>06d}.png'.format(opt.save_dir, epoch, i), x_0_kp)
+                    plot('{}/x_kp_{}_{:>06d}.png'.format(opt.save_dir, epoch, i), x_g_kp)
+                    # plot('{}/x_fixed_{}_{:>06d}.png'.format(opt.save_dir, epoch, i), x_fixed)
                     plot('{}/x_0_{}_{:>06d}.png'.format(opt.save_dir, epoch, i), x_0)
                                   
                     # if opt.plot_uncond:
@@ -341,12 +366,13 @@ def train_z_G(epoch, train_loader, model_list, criterion, optimizer, opt, logger
                         # x_q_y, _ = sample_q(model, buffer, y=y)
                         # plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, i), x_q_y)
 
-                    en_neg_2 = model_E(z_e_k)[0].mean()
-                    en_pos_2 = model_E(z_g_k)[0].mean()
+                    en_neg_2 = model_E(z_e_kp)[0].mean()
+                    en_pos_2 = model_E(z_g_kp)[0].mean()
 
                     prior_moments = '[{:8.2f}, {:8.2f}, {:8.2f}]'.format(z_e_k.mean(), z_e_k.std(), z_e_k.abs().max())
                     posterior_moments = '[{:8.2f}, {:8.2f}, {:8.2f}]'.format(z_g_k.mean(), z_g_k.std(), z_g_k.abs().max())
                     str = '{:5d}/{:5d} {:5d}/{:5d} '.format(epoch, opt.epochs, i, len(train_loader)) + 'loss_g={:8.3f}, '.format(loss_g) +'loss_e={:8.3f}, '.format(loss_e) +'en_pos=[{:9.4f}, {:9.4f}, {:9.4f}], '.format(en_pos, en_pos_2, en_pos_2-en_pos) +'en_neg=[{:9.4f}, {:9.4f}, {:9.4f}], '.format(en_neg, en_neg_2, en_neg_2-en_neg) +'|z_g_0|={:6.2f}, '.format(z_g_0.view(batch_size, -1).norm(dim=1).mean()) + '|z_g_k|={:6.2f}, '.format(z_g_k.view(batch_size, -1).norm(dim=1).mean()) +'|z_e_0|={:6.2f}, '.format(z_e_0.view(batch_size, -1).norm(dim=1).mean()) +'|z_e_k|={:6.2f}, '.format(z_e_k.view(batch_size, -1).norm(dim=1).mean()) + 'z_e_disp={:6.2f}, '.format((z_e_k-z_e_0).view(batch_size, -1).norm(dim=1).mean()) +'z_g_disp={:6.2f}, '.format((z_g_k-z_g_0).view(batch_size, -1).norm(dim=1).mean()) + 'x_e_disp={:6.2f}, '.format((x_k-x_0).view(batch_size, -1).norm(dim=1).mean()) +'prior_moments={}, '.format(prior_moments) + 'posterior_moments={}, '.format(posterior_moments)
+                    print(str)
 
                     
     return loss_e

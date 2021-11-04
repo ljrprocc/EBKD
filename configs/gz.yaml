@@ -5,19 +5,25 @@ nez: 1
 ngf: 128
 ndf: 1000
 model_s: ZGc
-data_noise: 0.001
+data_noise: 0.
 e_activation_leak: 0.2
+reinit_freq: 0.01
+capcitiy: 10000
+short_run: True
 
-e_l_steps: 80
+e_l_steps: 60
 e_l_step_size: 0.4
-e_activation: swish
+e_activation: leaky
 g_activation: leaky
-g_l_steps: 40
-g_l_step_size: 0.1
-e_lr: 0.00002
-g_lr: 0.0001
-g_batchnorm: False
-e_sn: False
+g_l_steps: 20
+g_l_step_size: 1
+# e_lr: 0.00002
+# g_lr: 0.0001
+e_lr: 0.0001
+g_lr: 0.001
+g_batchnorm: True
+e_sn: True
+# g_llhd_sigma: 0.03
 g_llhd_sigma: 0.03
 
 e_max_norm: 100

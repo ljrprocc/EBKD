@@ -84,14 +84,21 @@ class _netE(nn.Module):
             apply_sn(nn.Linear(args.nz, args.ndf)),
             f,
 
-            apply_sn(nn.Linear(args.ndf, args.ndf)),
+            apply_sn(nn.Linear(args.ndf, 2*args.ndf)),
             f,
 
-            apply_sn(nn.Linear(args.ndf, num_classes))
+            apply_sn(nn.Linear(2*args.ndf, 2*args.ndf)),
+            f,
+
+            apply_sn(nn.Linear(2*args.ndf, 4*args.ndf)),
+            f,
+
+            apply_sn(nn.Linear(4*args.ndf, num_classes))
         )
 
         self.last_dim = args.ndf
         self.num_classes = num_classes
+        self.apply(weights_init_xavier)
 
     def forward(self, z, is_feat=False):
         # print(z.device, next(self.parameters()).device)
@@ -126,6 +133,7 @@ class _netG_cifar(nn.Module):
             nn.ConvTranspose2d(args.ngf*2, args.nc, 4, 2, 1),
             nn.Tanh()
         )
+        self.apply(weights_init_xavier)
 
     def forward(self, z):
         return self.gen(z)

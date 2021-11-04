@@ -36,8 +36,8 @@ def diag_standard_normal_NLL(z):
     nll = 0.5 * (z * z)
     return nll.squeeze()
 
-def getDirichl(net_path, scale=1, sim_scale=1):
-    sim_matrix = create_similarity(net_path, scale=sim_scale)
+def getDirichl(net_path, scale=1, sim_scale=1, device=None):
+    sim_matrix = create_similarity(net_path, scale=sim_scale, device=device)
     # X = torch.zeros(bs, num_classes).to(sim_matrix.device)
     c_n = (sim_matrix - sim_matrix.min(1)[0]) / (sim_matrix.max(1)[0] - sim_matrix.min(1)[0])
     c_n = c_n * scale + 0.000001
@@ -139,6 +139,7 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
         # The process of get x_q~p_{\theta}(x), stochastic process of x*=argmin_{x}(E_{\theta}(x))
         # print(replay_buffer.shape, y_q.shape)
         x_q, samples = sample_q(model, replay_buffer, y=y_q, train=True)
+        # print(x_p.device, opt.y.device)
         f_p = model(x_p, py=opt.y)[0]
         f_q = model(x_q, py=opt.y)[0]
         fp = f_p.mean()
@@ -240,9 +241,9 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
     return L, cache_p_x, cache_p_x_y, logit, ls
 
 
-def create_similarity(netT_path, scale=1):
+def create_similarity(netT_path, scale=1, device=None):
     # Motivated by Zero-shot KD, Nayak et. al, ICML 2019
-    weight = torch.load(netT_path)['model']['fc.weight']
+    weight = torch.load(netT_path, map_location=device)['model']['fc.weight']
     K, _ = weight.shape
     # K: num_classes
     weight_normed = weight / torch.norm(weight, dim=1).unsqueeze(-1)

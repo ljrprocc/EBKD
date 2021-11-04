@@ -23,6 +23,7 @@ from helper.util_gen import getDirichl, add_dict
 
 from helper.gen_loops import train_generator, train_joint, train_z_G
 from helper.pretrain import init
+from helper.sampling import get_replay_buffer
 
 # DDP setting
 import torch.multiprocessing as mp
@@ -94,6 +95,9 @@ def parse_option():
     # Conditional generation for downstream KD tasks.
     opt.cond = True
     opt.spec_norm = False
+    # Setting no data noise in short-run MCMC.
+    if opt.short_run:
+        opt.data_noise = 0.
 
     # set different learning rate from these 4 models
     # if opt.model in ['MobileNetV2', 'ShuffleV1', 'ShuffleV2']:
@@ -239,17 +243,22 @@ def main_function(gpu, opt):
             model_score = model_dict[opt.model_s](args=opt, num_classes=opt.n_cls)
         else:
             model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm, act=opt.act, multiscale=opt.multiscale)
+        netG = None
     
     model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
     
     
     optimizer = set_optimizers(opt, model_score=model_score, model_G=netG, config_type=config_type)
+    prior_buffer, _ = get_replay_buffer(opt, model=model_score, config_type=config_type)
+    post_buffer, _ = get_replay_buffer(opt, model=model_score, config_type=config_type)
+    buffer_lists = [prior_buffer, post_buffer]
+
     if config_type == 'gz':
-        optG, optE, lrG, lrE = optimizer
+        optE, optG, lrE, lrG = optimizer
         optimizer_list = [optG, optE]
     else:
-        buffer, _ = get_replay_buffer(opt, model=model_score)
-        opt.y = getDirichl(opt.path_t) if opt.use_py else None
+        
+        opt.y = getDirichl(opt.path_t, device=opt.device) if opt.use_py else None
     if opt.joint:
         model = load_teacher(opt.path_t, opt)
         model_stu = model_dict[opt.model_stu](num_classes=opt.n_cls, norm='batch')
@@ -301,11 +310,12 @@ def main_function(gpu, opt):
     # print(opt.y)
     # routine
     for epoch in range(opt.init_epochs+1, opt.epochs + 1):
-        if epoch in opt.lr_decay_epochs_ebm:
-            for param_group in optimizer.param_groups:
-                new_lr = param_group['lr'] * opt.lr_decay_rate_ebm
-                param_group['lr'] = new_lr
+        
         if config_type == 'jem':
+            if epoch in opt.lr_decay_epochs_ebm:
+                for param_group in optimizer.param_groups:
+                    new_lr = param_group['lr'] * opt.lr_decay_rate_ebm
+                    param_group['lr'] = new_lr
             adjust_learning_rate(epoch, opt, optimizer)
         if (not ddp) or gpu == 0:
             print("==> training...")
@@ -318,12 +328,12 @@ def main_function(gpu, opt):
             # loader_lb.sampler.set_epoch(epoch)
         if config_type == 'jem':
             if opt.joint:
-                train_loss = train_joint(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger)
+                train_loss = train_joint(epoch, train_loader, model_list, optimizer, opt, prior_buffer, logger, device=opt.device)
             else:
-                train_loss = train_generator(epoch, train_loader, model_list, criterion, optimizer, opt, buffer, logger, local_rank=gpu)
+                train_loss = train_generator(epoch, train_loader, model_list, optimizer, opt, prior_buffer, logger, local_rank=gpu, device=opt.device)
         else:
             
-            train_loss = train_z_G(epoch, train_loader, model_list, criterion, optimizer_list, opt, logger, local_rank=gpu, device=opt.device)
+            train_loss = train_z_G(epoch, buffer_lists, train_loader, model_list, criterion, optimizer_list, opt, logger, local_rank=gpu, device=opt.device)
             lrE.step(epoch=epoch)
             lrG.step(epoch=epoch)
         
@@ -341,7 +351,7 @@ def main_function(gpu, opt):
             if config_type == 'jem':
                 ckpt_dict = {
                     "model_state_dict": model_score.state_dict(),
-                    "replay_buffer": buffer
+                    "replay_buffer": prior_buffer if not opt.short_run else None
                 }
             else:
                 ckpt_dict = {
