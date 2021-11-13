@@ -118,9 +118,17 @@ class _netG_cifar(nn.Module):
             nn.BatchNorm2d(args.ngf*8) if args.g_batchnorm else nn.Identity(),
             f,
 
+            # nn.Conv2d(args.ngf*8, args.ngf*8, 3, 1, 1, bias = not args.g_batchnorm),
+            # nn.BatchNorm2d(args.ngf*8) if args.g_batchnorm else nn.Identity(),
+            # f,
+
             nn.ConvTranspose2d(args.ngf*8, args.ngf*4, 4, 2, 1, bias = not args.g_batchnorm),
             nn.BatchNorm2d(args.ngf*4) if args.g_batchnorm else nn.Identity(),
             f,
+
+            # nn.Conv2d(args.ngf*4, args.ngf*4, 3, 1, 1, bias = not args.g_batchnorm),
+            # nn.BatchNorm2d(args.ngf*4) if args.g_batchnorm else nn.Identity(),
+            # f,
 
             nn.ConvTranspose2d(args.ngf*4, args.ngf*2, 4, 2, 1, bias = not args.g_batchnorm),
             nn.BatchNorm2d(args.ngf*2) if args.g_batchnorm else nn.Identity(),

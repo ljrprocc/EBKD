@@ -9,12 +9,14 @@ from torch.autograd import grad
 import torch.nn.functional as F
 import torchvision.transforms as T
 import torchvision.utils as vutils
+import random
+
 from math import sqrt
 sys.path.append('..')
 from datasets.cifar100 import CIFAR100Gen
  
 from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras, inception_score, TVLoss
-from .util_gen import update_theta, getDirichl 
+from .util_gen import update_theta, getDirichl, diag_normal_NLL
 from .util_gen import cond_samples
 from torch.autograd import Variable
 from .sampling import langevin_at_z, langevin_at_x
@@ -43,7 +45,7 @@ def train_joint(epoch, train_loader, model_list, optimizer, opt, buffer, logger,
     plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
 
     end = time.time()
-    sample_q = langevin_at_x(opt)
+    sample_q = langevin_at_x(opt, device=device)
     correct = 0
     total_length = 0
     for idx, data in enumerate(train_loader):
@@ -171,7 +173,7 @@ def train_generator(epoch, train_loader, model_list, optimizer, opt, buffer, log
     plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
 
     end = time.time()
-    sample_q = langevin_at_x(opt)
+    sample_q = langevin_at_x(opt, device=device)
     correct = 0
     total_length = 0
     for idx, data in enumerate(train_loader):
@@ -263,14 +265,15 @@ def train_generator(epoch, train_loader, model_list, optimizer, opt, buffer, log
                 x_q, _ = sample_q(model, buffer, y=y_q)
                 plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q)
             if opt.plot_cond:  # generate class-conditional samples
-                y = torch.arange(0, opt.n_cls).to(input.device)
+                y = torch.arange(0, opt.n_cls).to(device)
+                # print(y.device, device)
                 # print(y.shape)
                 x_q_y, _ = sample_q(model, buffer, y=y)
                 plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q_y)
 
     return losses.avg
 
-def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt, logger, local_rank=None, device=None):
+def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt, logger, local_rank=None, device=None, model_cls=None):
     model_E, model_G = model_list
     optG, optE = optimizer
 
@@ -282,6 +285,7 @@ def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt
     sample_langevin_prior_z, sample_langevin_post_z, sample_p_0 = langevin_at_z(opt, device=device)
     # z_fixed = sample_p_0()
     x_fixed = next(iter(train_loader))[0].to(device)
+    y_fixed = next(iter(train_loader))[1].to(device)
     prior_buffer, post_buffer = buffer
 
     # Future for combining with function update_theta
@@ -290,7 +294,9 @@ def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt
             x = x.to(device)
             batch_size = x.shape[0]
             y = y.to(device)
-            
+            nldata = train_labeled_loader.__next__()
+            # x_lab, y_lab = nldata[0], nldata[1] 
+            # x_lab, y_lab = x_lab.to(device), y_lab.to(device)
             
             # Initialize chains
             z_g_0, g_inds = sample_p_0(post_buffer, n=batch_size)
@@ -298,7 +304,7 @@ def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt
             # print(x.device, z_g_0.device, z_e_0.device)
             
             # Langevin posterior and prior
-            z_g_k, _, _, _= sample_langevin_post_z(replay_buffer_post=post_buffer, buffer_inds=g_inds, netE=model_E, z=Variable(z_g_0), x=x, args=opt, netG=model_G, y=y, verbose=i<10)
+            z_g_k, samples, _, _= sample_langevin_post_z(replay_buffer_post=post_buffer, buffer_inds=g_inds, netE=model_E, z=Variable(z_g_0), x=x, args=opt, netG=model_G, y=y, verbose=i<5)
             z_e_k, _, _ = sample_langevin_prior_z(replay_buffer_prior=prior_buffer, buffer_inds=e_inds, netE=model_E, z=Variable(z_e_0), args=opt, y=y)
 
             # Learn generator
@@ -318,10 +324,37 @@ def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt
 
             # Learn prior EBM
             optE.zero_grad()
+            model_G.eval()
             en_neg = model_E(z_e_k.detach())[0].mean() # TODO(nijkamp): why mean() here and in Langevin sum() over energy? constant is absorbed into Adam adaptive lr
             en_pos = model_E(z_g_k.detach())[0].mean()
             # print(z_g_k.mean())
             loss_e = en_pos - en_neg
+            K = opt.lc_K
+            # print(K)
+            if opt.joint:
+                model_cls.eval()
+                if opt.st == -1:
+                    # Randomly sample the start point
+                    st = random.randint(0, opt.g_l_steps - K)
+                else:
+                    # Sample from the given start point.
+                    st = opt.st
+                for sample_at_k in samples[st:st+K]:
+                    z_k, z_k_minus_1, noise = sample_at_k
+                    x_k = model_G(z_k)
+                    x_k_minus_1 = model_G(z_k_minus_1.detach())
+                    logit_k = model_cls(x_k)
+                    logit_k_minus_1 = model_cls(x_k_minus_1)
+                    # Only consider classification result
+                    l_c_k = torch.nn.CrossEntropyLoss()(logit_k, y)
+                    l_c_k_minus_1 = torch.nn.CrossEntropyLoss()(logit_k_minus_1, y)
+                    mu = z_k - noise
+                    sigma = opt.g_l_step_size * torch.ones_like(z_k)
+                    nll = diag_normal_NLL(torch.flatten(z_k, 1), torch.flatten(mu, 1), 2*torch.flatten(sigma, 1).log()).mean(1)
+                    l_b = ((l_c_k_minus_1 - l_c_k) * nll).mean()
+                    loss_e += opt.g_l_steps / opt.lc_K * l_b
+
+            
             loss_e.backward()
             if loss_e.abs().item() > 1e5:
                 print(loss_e.item(), en_pos.item(), en_neg.item())
@@ -341,6 +374,10 @@ def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt
                 with torch.no_grad():
                     logger.log_value('l_g', loss_g, global_iter)
                     logger.log_value('l_e', loss_e, global_iter)
+                    if opt.joint:
+                        logger.log_value('l_b', l_b, global_iter)
+                        logger.log_value('l_cls_k', l_c_k, global_iter)
+                        logger.log_value('l_cls_k_minus_1', l_c_k_minus_1, global_iter)
                     logger.log_value('z_e_k', z_e_k.mean(), global_iter)
                     logger.log_value('z_g_k', z_g_k.mean(), global_iter)
                     
@@ -368,10 +405,17 @@ def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt
 
                     en_neg_2 = model_E(z_e_kp)[0].mean()
                     en_pos_2 = model_E(z_g_kp)[0].mean()
+                    if opt.joint:
+                        logit = model_cls(x_g_kp).argmax(1)
+                        correct = (logit == y_fixed).sum()
+                        pretrained_acc_moments = 'Pretrained accuracy: {:.2f} / {:.2f} = {:.2f} '.format(correct, batch_size_fixed, correct / batch_size_fixed)
 
                     prior_moments = '[{:8.2f}, {:8.2f}, {:8.2f}]'.format(z_e_k.mean(), z_e_k.std(), z_e_k.abs().max())
                     posterior_moments = '[{:8.2f}, {:8.2f}, {:8.2f}]'.format(z_g_k.mean(), z_g_k.std(), z_g_k.abs().max())
+                    
                     str = '{:5d}/{:5d} {:5d}/{:5d} '.format(epoch, opt.epochs, i, len(train_loader)) + 'loss_g={:8.3f}, '.format(loss_g) +'loss_e={:8.3f}, '.format(loss_e) +'en_pos=[{:9.4f}, {:9.4f}, {:9.4f}], '.format(en_pos, en_pos_2, en_pos_2-en_pos) +'en_neg=[{:9.4f}, {:9.4f}, {:9.4f}], '.format(en_neg, en_neg_2, en_neg_2-en_neg) +'|z_g_0|={:6.2f}, '.format(z_g_0.view(batch_size, -1).norm(dim=1).mean()) + '|z_g_k|={:6.2f}, '.format(z_g_k.view(batch_size, -1).norm(dim=1).mean()) +'|z_e_0|={:6.2f}, '.format(z_e_0.view(batch_size, -1).norm(dim=1).mean()) +'|z_e_k|={:6.2f}, '.format(z_e_k.view(batch_size, -1).norm(dim=1).mean()) + 'z_e_disp={:6.2f}, '.format((z_e_k-z_e_0).view(batch_size, -1).norm(dim=1).mean()) +'z_g_disp={:6.2f}, '.format((z_g_k-z_g_0).view(batch_size, -1).norm(dim=1).mean()) + 'x_e_disp={:6.2f}, '.format((x_k-x_0).view(batch_size, -1).norm(dim=1).mean()) +'prior_moments={}, '.format(prior_moments) + 'posterior_moments={}, '.format(posterior_moments)
+                    if opt.joint:
+                        str += pretrained_acc_moments
                     print(str)
 
                     

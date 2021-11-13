@@ -118,14 +118,17 @@ def parse_option():
     config_type = opt.config.split('/')[-1].split('.')[0]
 
     # opt.model_t = get_teacher_name(opt.path_t)
-    if opt.joint:
-        opt.model_name = '{}_T:{}_S:{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_k_{}'.format(opt.model_s, opt.model, opt.model_stu, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.lc_K)
-    elif config_type == 'gz':
-        opt.model_name = '{}_{}_ngf_{}_ndf_{}_elr_{}_glr_{}_trial_{}'.format(opt.dataset, opt.model_s, opt.ngf, opt.ndf, opt.e_lr, opt.g_lr, opt.trial)
-    else:
-        opt.model_name = '{}_{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}'.format(opt.dataset, opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.trial)
+    if config_type == 'jem':
+        if opt.joint:
+            opt.model_name = '{}_T:{}_S:{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_k_{}'.format(opt.model_s, opt.model, opt.model_stu, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.lc_K)
+        else:
+            opt.model_name = '{}_{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}'.format(opt.dataset, opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.trial)
 
-    
+    else:
+        if not opt.joint:
+            opt.model_name = '{}_{}_ngf_{}_ndf_{}_elr_{}_glr_{}_trial_{}'.format(opt.dataset, opt.model_s, opt.ngf, opt.ndf, opt.e_lr, opt.g_lr, opt.trial)
+        else:
+            opt.model_name = '{}_{}_ngf_{}_ndf_{}_elr_{}_glr_{}_lcK_{}_st_{}_trial_{}'.format(opt.dataset, opt.model_s, opt.ngf, opt.ndf, opt.e_lr, opt.g_lr, opt.lc_K, opt.st, opt.trial)
     
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
@@ -153,7 +156,7 @@ def load_teacher(model_path, opt):
     if opt.dataset == 'imagenet':
         model = model_dict[model_t](num_classes=opt.n_cls, pretrained=True)
     else:
-        model.load_state_dict(torch.load(model_path)['model'])
+        model.load_state_dict(torch.load(model_path, map_location=opt.device)['model'])
     print('===> done.')
     return model
 
@@ -256,12 +259,13 @@ def main_function(gpu, opt):
     if config_type == 'gz':
         optE, optG, lrE, lrG = optimizer
         optimizer_list = [optG, optE]
-    else:
-        
-        opt.y = getDirichl(opt.path_t, device=opt.device) if opt.use_py else None
-    if opt.joint:
+        print(opt.path_t)
         model = load_teacher(opt.path_t, opt)
-        model_stu = model_dict[opt.model_stu](num_classes=opt.n_cls, norm='batch')
+    else:
+        opt.y = getDirichl(opt.path_t, device=opt.device) if opt.use_py else None
+        if opt.joint:
+            model = load_teacher(opt.path_t, opt)
+            model_stu = model_dict[opt.model_stu](num_classes=opt.n_cls, norm='batch')
     
 
     if torch.cuda.is_available():
@@ -280,10 +284,12 @@ def main_function(gpu, opt):
             model_score = model_score.to(opt.device)
             if config_type == 'gz':
                 netG = netG.to(opt.device)
-            # criterion = criterion.cuda()
-            if opt.joint:
                 model = model.to(opt.device)
-                model_stu = model_stu.to(opt.device)
+            # criterion = criterion.cuda()
+            else:
+                if opt.joint:
+                    model = model.to(opt.device)
+                    model_stu = model_stu.to(opt.device)
 
         cudnns.benchmark = True
         cudnns.enabled = True
@@ -333,7 +339,7 @@ def main_function(gpu, opt):
                 train_loss = train_generator(epoch, train_loader, model_list, optimizer, opt, prior_buffer, logger, local_rank=gpu, device=opt.device)
         else:
             
-            train_loss = train_z_G(epoch, buffer_lists, train_loader, model_list, criterion, optimizer_list, opt, logger, local_rank=gpu, device=opt.device)
+            train_loss = train_z_G(epoch, buffer_lists, train_loader, model_list, criterion, optimizer_list, opt, logger, local_rank=gpu, device=opt.device, model_cls=model if opt.joint else None)
             lrE.step(epoch=epoch)
             lrG.step(epoch=epoch)
         
@@ -363,7 +369,7 @@ def main_function(gpu, opt):
             if gpu == 0:
                 torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_epoch_{epoch}.pts'.format(epoch=epoch)))
 
-    cleanup()
+    
 
 def main():
     opt = parse_option()

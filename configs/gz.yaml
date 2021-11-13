@@ -5,18 +5,24 @@ nez: 1
 ngf: 128
 ndf: 1000
 model_s: ZGc
+model: resnet32x4
 data_noise: 0.
 e_activation_leak: 0.2
 reinit_freq: 0.01
 capcitiy: 10000
 short_run: True
+lc_K: 5
+st: 0
+joint: True
+path_t: /data/lijingru/EBKD/save/models/resnet32x4_vanilla/ckpt_epoch_240.pth
 
-e_l_steps: 60
-e_l_step_size: 0.4
-e_activation: leaky
+
+e_l_steps: 80
+e_l_step_size: 0.5
+e_activation: swish
 g_activation: leaky
-g_l_steps: 20
-g_l_step_size: 1
+g_l_steps: 40
+g_l_step_size: 1.
 # e_lr: 0.00002
 # g_lr: 0.0001
 e_lr: 0.0001

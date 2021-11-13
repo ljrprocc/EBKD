@@ -110,7 +110,7 @@ class Bottleneck(nn.Module):
 
 class ResNet(nn.Module):
 
-    def __init__(self, depth, num_filters, block_name='BasicBlock', num_classes=10, norm='none', act='relu', in_channels=3, use_latent=False, latent_dim=128, img_size=32):
+    def __init__(self, depth, num_filters, block_name='BasicBlock', num_classes=10, norm='none', act='relu', in_channels=3, use_latent=False, latent_dim=128, img_size=32, multiscale=False):
         super(ResNet, self).__init__()
         norm_layer = get_norm(norm)
         act_layer = get_act(act)

@@ -1,22 +1,23 @@
 # Fast MCMC setting
 # JEM
-model_s: resnet28x10
+model_s: resnet20x10
 model: resnet32x4
 model_stu: resnet8x4
 act: swish
 norm: none
-g_steps: 40
+g_steps: 80
 step_size: 1
 capcitiy: 10000
 reinit_freq: 0.05
 cls: cls
 energy: mcmc
 use_py: True
-data_noise: 0.03
+data_noise: 0.
 batch_size: 256
+plot_cond: True
 path_t: /data/lijingru/EBKD/save/models/resnet32x4_vanilla/ckpt_epoch_240.pth
 learning_rate_ebm: 0.0001
 weight_decay_ebm: 0
-lr_decay_epochs: 50,100
+lr_decay_epochs: 20,50
 lr_decay_rate_ebm: 0.3
 short_run: True
