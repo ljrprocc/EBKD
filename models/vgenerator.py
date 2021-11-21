@@ -145,3 +145,42 @@ class _netG_cifar(nn.Module):
 
     def forward(self, z):
         return self.gen(z)
+
+class F(nn.Module):
+    def __init__(self, n_c=3, n_f=64, l=0.2, num_classes=100, norm='none', act='leaky', multiscale=False):
+        super(F, self).__init__()
+        # self.f = nn.Sequential(
+        #     nn.Conv2d(n_c, n_f, 3, 1, 1),
+        #     nn.LeakyReLU(l),
+        #     nn.Conv2d(n_f, n_f * 2, 4, 2, 1),
+        #     nn.LeakyReLU(l),
+        #     nn.Conv2d(n_f * 2, n_f * 4, 4, 2, 1),
+        #     nn.LeakyReLU(l),
+        #     nn.Conv2d(n_f * 4, n_f * 8, 4, 2, 1),
+        #     nn.LeakyReLU(l),
+        #     nn.Conv2d(n_f * 8, num_classes, 4, 1, 0))
+        self.conv1 = nn.Conv2d(n_c, n_f, 3, 1, 1)
+        self.leaky = nn.LeakyReLU(l)
+        self.conv2 = nn.Conv2d(n_f, n_f * 2, 4, 2, 1)
+        self.conv3 = nn.Conv2d(n_f * 2, n_f * 4, 4, 2, 1)
+        self.conv4 = nn.Conv2d(n_f * 4, n_f * 8, 4, 2, 1)
+        self.conv5 = nn.Conv2d(n_f * 8, n_f * 8, 3, 1, 1)
+        self.last_dim = n_f * 8
+        self.fc = nn.Linear(self.last_dim*2*2, num_classes)
+        self.num_classes = num_classes
+        self.avgpool = nn.AvgPool2d(2)
+
+    def forward(self, x, is_feat=False, preact=False):
+        f1 = self.conv1(x)
+        f2 = self.leaky(self.conv2(f1))
+        f3 = self.leaky(self.conv3(f2))
+        f4 = self.leaky(self.conv4(f3))
+        f5 = self.leaky(self.conv5(f4))
+        
+        fc = self.avgpool(f5)
+        fc = fc.view(x.size(0), -1)
+        out = self.fc(fc)
+        if is_feat:
+            return [f1, f2, f3, f4, f5, fc], out
+        else:
+            return out

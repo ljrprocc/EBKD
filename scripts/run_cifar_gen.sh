@@ -14,6 +14,6 @@
 
 # CUDA_VISIBLE_DEVICES=2 python train_ebm.py --model_s wrn_22_10 --trial cor_multi_5 --save_freq 5 --epochs 150 --lr_decay_epochs 50,100 --plot_cond --learning_rate 0.0001 --batch_size 128  --energy mcmc --warmup_iters 1000 --lmda_p_x_y 1. --lmda_p_x 0 --num_workers 4 --data_noise 0.03 --print_freq 100 --use_py --reinit_freq 0.05 --multiscale
 
-python train_ebm.py --config ./configs/gz.yaml --trial short_run_4 --save_freq 20 --epochs 100 --batch_size 128  --warmup_iters 1000 --num_workers 4 --print_freq 20 --gpu 1
+# python train_ebm.py --config ./configs/gz.yaml --trial short_run_4 --save_freq 20 --epochs 100 --batch_size 128  --warmup_iters 1000 --num_workers 4 --print_freq 20 --gpu 1
 
-# python train_ebm.py --config ./configs/jem.yaml --trial short_run --save_freq 10 --epochs 100 --batch_size 256 --warmup_iters 1000 --num_workers 4 --print_freq 50 --gpu 0
+python train_ebm.py --config ./configs/vae.yaml --trial pure_vae_2 --save_freq 20 --epochs 200 --warmup_iters 1000 --num_workers 4 --print_freq 50 --gpu 0

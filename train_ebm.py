@@ -5,6 +5,7 @@ import argparse
 import socket
 import time
 import yaml
+import json
 
 import tensorboard_logger as tb_logger
 import torch
@@ -21,7 +22,7 @@ from datasets.svhn import get_svhn_dataloaders, get_svhn_dataloaders_sample
 from helper.util import adjust_learning_rate, TVLoss
 from helper.util_gen import getDirichl, add_dict
 
-from helper.gen_loops import train_generator, train_joint, train_z_G
+from helper.gen_loops import train_generator, train_joint, train_z_G, train_vae
 from helper.pretrain import init
 from helper.sampling import get_replay_buffer
 
@@ -37,7 +38,6 @@ def parse_option():
     parser.add_argument('--print_freq', type=int, default=100, help='print_frequency')
     parser.add_argument('--tb_freq', type=int, default=500, help='tb frequency')
     parser.add_argument('--save_freq', type=int, default=40, help='save frequency')
-    parser.add_argument('--batch_size', type=int, default=64, help='batch_size')
     parser.add_argument('--num_workers', type=int, default=8, help='num of workers to use')
     parser.add_argument('--epochs', type=int, default=240, help='number of training epochs')
     parser.add_argument('--init_epochs', type=int, default=0, help='init training for two-stage methods and resume')
@@ -45,10 +45,10 @@ def parse_option():
     # parser.add_argument('--data_noise', type=float, default=0.03, help="The adding noise for sampling data point x~p_data.")
 
     # optimization
-    parser.add_argument('--learning_rate_ebm', type=float, default=0.01, help='learning rate')
-    parser.add_argument('--lr_decay_epochs_ebm', type=str, default='150,180,210,250', help='where to decay lr, can be a list')
-    parser.add_argument('--lr_decay_rate_ebm', type=float, default=0.3, help='decay rate for learning rate')
-    parser.add_argument('--weight_decay_ebm', type=float, default=0.0, help='weight decay')
+    # parser.add_argument('--learning_rate_ebm', type=float, default=0.01, help='learning rate')
+    # parser.add_argument('--lr_decay_epochs_ebm', type=str, default='150,180,210,250', help='where to decay lr, can be a list')
+    # parser.add_argument('--lr_decay_rate_ebm', type=float, default=0.3, help='decay rate for learning rate')
+    # parser.add_argument('--weight_decay_ebm', type=float, default=0.0, help='weight decay')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 
     # dataset
@@ -122,13 +122,16 @@ def parse_option():
         if opt.joint:
             opt.model_name = '{}_T:{}_S:{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}_k_{}'.format(opt.model_s, opt.model, opt.model_stu, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.lc_K)
         else:
-            opt.model_name = '{}_{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_trial_{}'.format(opt.dataset, opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.trial, opt.trial)
+            opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_g_steps_{}_trial_{}'.format(opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.g_steps, opt.trial)
+    elif config_type == 'vae':
+        opt.model_name = '{}_lr_{}_decay_{}_ndf_{}_trial_{}'.format(opt.dataset, opt.exp_params['LR'], opt.exp_params['weight_decay'], opt.model_params['latent_dim'], opt.trial)
+        opt.batch_size = opt.exp_params['batch_size']
 
     else:
         if not opt.joint:
             opt.model_name = '{}_{}_ngf_{}_ndf_{}_elr_{}_glr_{}_trial_{}'.format(opt.dataset, opt.model_s, opt.ngf, opt.ndf, opt.e_lr, opt.g_lr, opt.trial)
         else:
-            opt.model_name = '{}_{}_ngf_{}_ndf_{}_elr_{}_glr_{}_lcK_{}_st_{}_trial_{}'.format(opt.dataset, opt.model_s, opt.ngf, opt.ndf, opt.e_lr, opt.g_lr, opt.lc_K, opt.st, opt.trial)
+            opt.model_name = '{}_ngf_{}_ndf_{}_elr_{}_glr_{}_lcK_{}_st_{}_trial_{}'.format(opt.dataset, opt.ngf, opt.ndf, opt.e_lr, opt.g_lr, opt.lc_K, opt.st, opt.trial)
     
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
@@ -199,6 +202,9 @@ def set_optimizers(opt, model_score, model_G=None, config_type='jem'):
         lr_scheduleE = torch.optim.lr_scheduler.ExponentialLR(optE, opt.e_gamma)
         lr_scheduleG = torch.optim.lr_scheduler.ExponentialLR(optG, opt.g_gamma)
         return optE, optG, lr_scheduleE, lr_scheduleG
+    elif config_type == 'vae':
+        optimizer = optim.Adam(model_score.parameters(), lr=opt.exp_params['LR'], betas=[0.9, 0.999],  weight_decay=opt.exp_params['weight_decay'])
+        return optimizer
     else:
         raise NotImplementedError('Not implemented at type {}'.format(config_type))
 
@@ -235,10 +241,11 @@ def main_function(gpu, opt):
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
 
     config_type = opt.config.split('/')[-1].split('.')[0]
+    assert config_type in ['gz', 'jem', 'vae']
     if config_type == 'gz':
         model_score = model_dict['ZE'](args=opt, num_classes=opt.n_cls)
         netG = model_dict['ZGc'](args=opt)
-    else:
+    elif config_type == 'jem':
         if opt.model_s == 'resnet28x10':
             d, w = opt.model_s.split('x')[0][-2:], opt.model_s.split('x')[1]
             model_score = model_dict[opt.model_s](depth=int(d), widen_factor=int(w), num_classes=opt.n_cls, norm=opt.norm)
@@ -247,25 +254,32 @@ def main_function(gpu, opt):
         else:
             model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm, act=opt.act, multiscale=opt.multiscale)
         netG = None
+    else:
+        model_score = model_dict['cvae'](**opt.model_params)
+        netG = None
     
-    model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
+    if config_type != 'vae':
+        model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
+        prior_buffer, _ = get_replay_buffer(opt, model=model_score, config_type=config_type)
+        post_buffer, _ = get_replay_buffer(opt, model=model_score, config_type=config_type)
+        buffer_lists = [prior_buffer, post_buffer]
     
     
     optimizer = set_optimizers(opt, model_score=model_score, model_G=netG, config_type=config_type)
-    prior_buffer, _ = get_replay_buffer(opt, model=model_score, config_type=config_type)
-    post_buffer, _ = get_replay_buffer(opt, model=model_score, config_type=config_type)
-    buffer_lists = [prior_buffer, post_buffer]
+    
 
     if config_type == 'gz':
         optE, optG, lrE, lrG = optimizer
         optimizer_list = [optG, optE]
         print(opt.path_t)
         model = load_teacher(opt.path_t, opt)
-    else:
+    elif config_type == 'jem':
         opt.y = getDirichl(opt.path_t, device=opt.device) if opt.use_py else None
         if opt.joint:
             model = load_teacher(opt.path_t, opt)
             model_stu = model_dict[opt.model_stu](num_classes=opt.n_cls, norm='batch')
+    else:
+        model = load_teacher(opt.path_t, opt)
     
 
     if torch.cuda.is_available():
@@ -286,6 +300,8 @@ def main_function(gpu, opt):
                 netG = netG.to(opt.device)
                 model = model.to(opt.device)
             # criterion = criterion.cuda()
+            elif config_type == 'vae':
+                model = model.to(opt.device)
             else:
                 if opt.joint:
                     model = model.to(opt.device)
@@ -298,6 +314,8 @@ def main_function(gpu, opt):
     if config_type == 'gz':
         model_list = [model_score, netG]
         criterion = torch.nn.MSELoss(reduction='sum')
+    elif config_type == 'vae':
+        model_list = [model, model_score]
     else:
         if opt.joint:
             model_list = [model, model_stu, model_score]
@@ -313,6 +331,8 @@ def main_function(gpu, opt):
     
     if (not ddp) or gpu == 0:
         print(opt)
+        with open(os.path.join(opt.save_folder, 'hyper'), 'w') as f:
+            f.write(str(opt))
     # print(opt.y)
     # routine
     for epoch in range(opt.init_epochs+1, opt.epochs + 1):
@@ -337,6 +357,8 @@ def main_function(gpu, opt):
                 train_loss = train_joint(epoch, train_loader, model_list, optimizer, opt, prior_buffer, logger, device=opt.device)
             else:
                 train_loss = train_generator(epoch, train_loader, model_list, optimizer, opt, prior_buffer, logger, local_rank=gpu, device=opt.device)
+        elif config_type == 'vae':
+            train_loss = train_vae(model_list, optimizer, opt, train_loader, logger, epoch)
         else:
             
             train_loss = train_z_G(epoch, buffer_lists, train_loader, model_list, criterion, optimizer_list, opt, logger, local_rank=gpu, device=opt.device, model_cls=model if opt.joint else None)
@@ -344,7 +366,7 @@ def main_function(gpu, opt):
             lrG.step(epoch=epoch)
         
         time2 = time.time()
-        logger.log_value('train_loss', train_loss, epoch)
+        # logger.log_value('train_loss', train_loss, epoch)
         print('epoch {}, total time {:.2f}'.format(epoch, time2 - time1))
         
         # save the best model
@@ -359,12 +381,18 @@ def main_function(gpu, opt):
                     "model_state_dict": model_score.state_dict(),
                     "replay_buffer": prior_buffer if not opt.short_run else None
                 }
-            else:
+
+            elif config_type == 'gz':
                 ckpt_dict = {
                     "model_state_dict": model_score.state_dict(),
                     "G_state_dict": netG.state_dict(),
                     "optG": optG.state_dict(),
                     "optE": optE.state_dict()
+                }
+            else:
+                ckpt_dict = {
+                    "model_state_dict": model_score.state_dict(),
+                    "optimizer": optimizer.state_dict()
                 }
             if gpu == 0:
                 torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_epoch_{epoch}.pts'.format(epoch=epoch)))

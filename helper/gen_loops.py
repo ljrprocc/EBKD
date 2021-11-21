@@ -101,7 +101,8 @@ def train_joint(epoch, train_loader, model_list, optimizer, opt, buffer, logger,
         
 
         # tensorboard logger
-        l_p_x, l_p_x_y, l_cls, l_c, l_c_k_minus_1, l2_k, l_cls_k, l_e_k, l2_k_1, l_cls_k_1, l_e_k_1 = ls
+        # l_p_x, l_p_x_y, l_cls, l_c, l_c_k_minus_1, l2_k, l_cls_k, l_e_k, l2_k_1, l_cls_k_1, l_e_k_1 = ls
+        l_p_x, l_p_x_y, l_cls, l_c, l_c_k_minus_1, l_cls_k, l_e_k, l_cls_k_1, l_e_k_1 = ls
         acc = torch.sum(torch.argmax(logit, 1) == y_lab).item() / input.size(0)
         accs.update(acc, input.size(0))
         global_iter = epoch * len(train_loader) + idx
@@ -111,10 +112,10 @@ def train_joint(epoch, train_loader, model_list, optimizer, opt, buffer, logger,
             logger.log_value('l_cls', l_cls, global_iter)
             logger.log_value('l_image_c_k', l_c, global_iter)
             logger.log_value('l_image_c_k_1', l_c_k_minus_1, global_iter)
-            logger.log_value('l_2_k', l2_k, global_iter)
+            # logger.log_value('l_2_k', l2_k, global_iter)
             logger.log_value('l_cls_k', l_cls_k, global_iter)
             logger.log_value('l_e_k', l_e_k, global_iter)
-            logger.log_value('l_2_k_1', l2_k_1, global_iter)
+            # logger.log_value('l_2_k_1', l2_k_1, global_iter)
             logger.log_value('l_cls_k_1', l_cls_k_1, global_iter)
             logger.log_value('l_e_k_1', l_e_k_1, global_iter)
             logger.log_value('accuracy', acc, global_iter)
@@ -420,10 +421,51 @@ def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt
 
                     
     return loss_e
-                    # logger.info()
 
 
+def train_vae(model_list, optimizer, opt, train_loader, logger, epoch):
+    model_t, model_vae = model_list
+    losses = AverageMeter()
     
+    plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
+    train_loader, train_labeled_loader = train_loader
+
+    x_fixed, y_fixed = next(train_labeled_loader)
+    x_fixed = x_fixed.to(opt.device)
+    y_fixed = y_fixed.to(opt.device)
+    train_imgs = len(train_loader.dataset)
+    for (idx, batch) in enumerate(train_loader):
+        real_img, labels = batch
+        curr_device = opt.device
+        real_img = real_img.to(curr_device)
+        labels = labels.to(curr_device)
+        optimizer.zero_grad()
+
+        results = model_vae(real_img, labels = labels)
+        train_loss = model_vae.loss_function(*results, M_N = opt.batch_size / train_imgs, optimizer_idx = 0, batch_idx = idx)
+        train_loss['loss'].backward()
+        optimizer.step()
+        global_iter = len(train_loader) * epoch + idx
+        if idx % opt.print_freq == 0:
+            logger.log_value('total_loss', train_loss['loss'], global_iter)
+            logger.log_value('Rec_loss', train_loss['Reconstruction_Loss'], global_iter)
+            logger.log_value('KL_Loss', train_loss['KLD'], global_iter)
+            print_str = 'Epoch: {} / {}, Data: {} / {}, total_loss = {:.4f}\t Reconstruction_loss = {:.4f}\t KL_loss = {:.4f}\t'.format(epoch, opt.epochs, idx, len(train_loader), train_loss['loss'], train_loss['Reconstruction_Loss'], train_loss['KLD'])
+            print(print_str)
+            if opt.plot_uncond:
+                y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(curr_device)
+                x_q = model_vae.sample(opt.batch_size, curr_device, labels = y_q)
+                plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q)
+            if opt.plot_cond:  # generate class-conditional samples
+                y = torch.arange(0, opt.n_cls).to(curr_device)
+                # print(y.shape)
+                x_q_y = model_vae.sample(opt.n_cls, curr_device, labels = y, train=False)
+                plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q_y)
+
+            x_rec = model_vae.generate(x_fixed, labels=y_fixed)
+            plot('{}/x_rec_fixed{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_rec)
+
+    return train_loss['loss']
 
 
 def validate_G(model, replay_buffer, opt, eval_loader=None):

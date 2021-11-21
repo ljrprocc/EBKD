@@ -111,14 +111,15 @@ def update_lc_theta(opt, x_q, t_logit, y_gt, s_logit, t_logit_true):
     y_one_hot = torch.eye(n_cls)[y_gt].to(x_q.device)
     l_cls = -torch.sum(torch.log_softmax(t_logit, 1) * y_one_hot, 1)
     bs = x_q.size(0)
-    l_2 = torch.norm(x_q.view(bs, -1), dim=-1)
+    # l_2 = torch.norm(x_q.view(bs, -1), dim=-1)
     # print(l_cls.shape, l_2.shape, l_tv.shape)
     # KL(p_t(y|x) || p_s(y|x))
-    l_e = torch.sum(torch.softmax(t_logit, 1) * (torch.log_softmax(s_logit, 1)- torch.log_softmax(t_logit_true, 1)), 1)
-    lc = opt.lmda_l2 * l_2 + 0.1*l_cls + opt.lmda_e * l_e
+    # l_e = torch.sum(torch.softmax(t_logit, 1) * (torch.log_softmax(s_logit, 1)- torch.log_softmax(t_logit_true, 1)), 1)
+    l_e = torch.sum(torch.softmax(t_logit, 1) * (torch.log_softmax(s_logit, 1) - torch.log_softmax(t_logit, 1)), 1)
+    lc = 0.1*l_cls + opt.lmda_e * l_e
     # print(lc.mean(), (lc - lc.mean()).mean())
     # c = lc.mean()
-    return lc, (l_2, l_cls, l_e)
+    return lc, (l_cls, l_e)
 
 def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=None):
     L = 0
@@ -197,14 +198,16 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
             logit_s = model_s(x_k)
             logit_t = model_t(x_k)
             l_c_k, cache_l_k = update_lc_theta(opt, x_k, logit_t, y_pos, logit_s, logit_t_pos) # l_c_k.requires_grad = False
-            l2_k, l_cls_k, l_e_k = cache_l_k
+            # l2_k, l_cls_k, l_e_k = cache_l_k
+            l_cls_k, l_e_k = cache_l_k
             # print(x_k_minus_1.requires_grad, x_k.requires_grad, noise.requires_grad)
             # exit(-1)
             with torch.no_grad():
                 logit_s = model_s(x_k_minus_1)
                 logit_t = model_t(x_k_minus_1)
                 l_c_k_minus_1, cache_l_k_1 = update_lc_theta(opt, x_k_minus_1, logit_t, y_pos, logit_s, logit_t_pos) # l_c_{k-1}.requires_grad = False
-                l2_k_1, l_cls_k_1, l_e_k_1 = cache_l_k_1
+                # l2_k_1, l_cls_k_1, l_e_k_1 = cache_l_k_1
+                l_cls_k_1, l_e_k_1 = cache_l_k_1
             # lc target updation
             mu = x_k - noise # mu.requires_grad = True
             sigma = 0.01 * torch.ones_like(x_k)
@@ -220,10 +223,10 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
         L += l_b_s
         ls.append(l_c_k.mean())
         ls.append(l_c_k_minus_1.mean())
-        ls.append(l2_k.mean())
+        # ls.append(l2_k.mean())
         ls.append(l_cls_k.mean())
         ls.append(l_e_k.mean())
-        ls.append(l2_k_1.mean())
+        # ls.append(l2_k_1.mean())
         ls.append(l_cls_k_1.mean())
         ls.append(l_e_k_1.mean())
 

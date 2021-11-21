@@ -70,6 +70,7 @@ def get_replay_buffer(opt, model=None, local_rank=None, config_type='jem'):
     else:
         print('Loading replay buffer from local..')
         ddp = (opt.dataset == 'imagenet')
+        map_location = opt.device
         if ddp:
             map_location = {'cuda:%d' % 0: 'cuda:%d' % local_rank}
         ckpt_dict = torch.load(opt.load_buffer_path, map_location=map_location)
@@ -93,7 +94,7 @@ def langevin_at_x(opts, device=None):
     sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     def sample_p_0(replay_buffer, bs, y=None):
-        if len(replay_buffer) == 0 or opts.short_run:
+        if opts.short_run or len(replay_buffer) == 0:
             return init_random((bs, nc, im_size, im_size)), []
             # return init_random((bs, l)), []
         buffer_size = len(replay_buffer) if y is None else len(replay_buffer) // opts.n_cls
@@ -152,7 +153,7 @@ def langevin_at_x(opts, device=None):
         
         final_samples = x_k.detach()
         # update replay buffer
-        if len(replay_buffer) > 0 and not opts.short_run:
+        if not opts.short_run and len(replay_buffer) > 0:
             replay_buffer[buffer_inds] = final_samples.cpu()
         if y is not None:
             return final_samples, samples
