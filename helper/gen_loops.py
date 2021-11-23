@@ -10,6 +10,7 @@ import torch.nn.functional as F
 import torchvision.transforms as T
 import torchvision.utils as vutils
 import random
+import tqdm
 
 from math import sqrt
 sys.path.append('..')
@@ -426,7 +427,8 @@ def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt
 def train_vae(model_list, optimizer, opt, train_loader, logger, epoch):
     model_t, model_vae = model_list
     losses = AverageMeter()
-    
+    model_vae.train()
+    model_t.eval()
     plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
     train_loader, train_labeled_loader = train_loader
 
@@ -442,15 +444,32 @@ def train_vae(model_list, optimizer, opt, train_loader, logger, epoch):
         optimizer.zero_grad()
 
         results = model_vae(real_img, labels = labels)
+        total_loss = 0.
         train_loss = model_vae.loss_function(*results, M_N = opt.batch_size / train_imgs, optimizer_idx = 0, batch_idx = idx)
-        train_loss['loss'].backward()
+        total_loss += train_loss['loss']
+        if opt.joint:
+            sampled_imgs = model_vae.sample(num_samples=opt.batch_size, current_device=curr_device, labels=labels, train=False)
+            logit_t = model_t(sampled_imgs)
+            l_cls = torch.nn.CrossEntropyLoss()(logit_t, labels)
+            logit_t_pos = model_t(real_img)
+            p_pos = F.log_softmax(logit_t_pos, 1)
+            p_neg = F.softmax(logit_t, 1)
+            kl_loss = F.kl_div(p_pos, p_neg)
+            total_loss += 0.1 * l_cls + 1. * kl_loss
+
+        total_loss.backward()
         optimizer.step()
         global_iter = len(train_loader) * epoch + idx
         if idx % opt.print_freq == 0:
             logger.log_value('total_loss', train_loss['loss'], global_iter)
             logger.log_value('Rec_loss', train_loss['Reconstruction_Loss'], global_iter)
             logger.log_value('KL_Loss', train_loss['KLD'], global_iter)
+
             print_str = 'Epoch: {} / {}, Data: {} / {}, total_loss = {:.4f}\t Reconstruction_loss = {:.4f}\t KL_loss = {:.4f}\t'.format(epoch, opt.epochs, idx, len(train_loader), train_loss['loss'], train_loss['Reconstruction_Loss'], train_loss['KLD'])
+            if opt.joint:
+                logger.log_value('l_cls', l_cls, global_iter)
+                logger.log_value('l_kl', kl_loss)
+                print_str += 'Classification Loss = {:.4f}\t +/- divergence = {:.4f}'.format(l_cls, kl_loss)
             print(print_str)
             if opt.plot_uncond:
                 y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(curr_device)
@@ -466,6 +485,17 @@ def train_vae(model_list, optimizer, opt, train_loader, logger, epoch):
             plot('{}/x_rec_fixed{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_rec)
 
     return train_loss['loss']
+
+def sample_vae(model, opt, n_samples=30000):
+    num_img_per_class = n_samples // opt.n_cls
+    y = torch.arange(0, opt.n_cls).to(opt.device)
+    plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
+    if not os.path.exists('{}/vae_samples/'.format(opt.save_folder)):
+        os.mkdir('{}/vae_samples/'.format(opt.save_folder))
+    for j in tqdm.tqdm(range(num_img_per_class)):
+        temp_x = model.sample(opt.n_cls, opt.device, labels=y, train=False)
+        for i, x in enumerate(temp_x):
+            plot('{}/vae_samples/samples_label_{}_{}.png'.format(opt.save_folder, i, j), x.unsqueeze(0))   
 
 
 def validate_G(model, replay_buffer, opt, eval_loader=None):

@@ -2,12 +2,12 @@
 # JEM
 model_s: resnet28x10
 model: resnet32x4
-model_stu: resnet8x4
+model_stu: resnet32x4
 act: swish
 norm: none
 g_steps: 20
 step_size: 1
-capcitiy: 30000
+capcitiy: 40000
 reinit_freq: 0.05
 cls: cls
 energy: mcmc
@@ -18,7 +18,7 @@ plot_cond: True
 path_t: /data/lijingru/EBKD/save/models/resnet32x4_vanilla/ckpt_epoch_240.pth
 learning_rate_ebm: 0.0003
 weight_decay_ebm: 0
-lr_decay_epochs_ebm: 50,100
+lr_decay_epochs_ebm: 150,300
 lr_decay_rate_ebm: 0.3
-short_run: False
+short_run: True
 init_epochs: 0

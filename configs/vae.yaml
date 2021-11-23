@@ -8,7 +8,7 @@ model_params:
 
 exp_params: 
   batch_size: 256 # Better to have a square number
-  LR: 0.01
+  LR: 0.005
   weight_decay: 0.0
   scheduler_gamma: 0.95
 
@@ -22,6 +22,7 @@ path_t: /data/lijingru/EBKD/save/models/resnet32x4_vanilla/ckpt_epoch_240.pth
 data_noise: 0.
 lr_decay_epochs_ebm: 50,100
 short_run: False
+joint: True
 
 logging_params:
   save_dir: "logs/"

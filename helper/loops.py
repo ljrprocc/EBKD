@@ -14,8 +14,8 @@ sys.path.append('..')
 from datasets.cifar100 import CIFAR100Gen
  
 from .util import AverageMeter, accuracy, set_require_grad, print_trainable_paras, inception_score, TVLoss
-from .util_gen import get_replay_buffer, update_theta, getDirichl 
-from .util_gen import get_sample_q, cond_samples, diag_normal_NLL, diag_standard_normal_NLL
+# from .sampling import get_replay_buffer, update_theta, getDirichl 
+# from .util_gen import get_sample_q, cond_samples, diag_normal_NLL, diag_standard_normal_NLL
 
 
 def train_vanilla(epoch, train_loader, model, criterion, optimizer, opt):
@@ -128,7 +128,6 @@ def train_distill(epoch, train_loader, module_list, criterion_list, optimizer, o
             index = index.cuda()
             if opt.distill in ['crd']:
                 contrast_idx = contrast_idx.cuda()
-        
         
         # ===================forward=====================
         preact = False
