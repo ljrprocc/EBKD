@@ -22,7 +22,7 @@ from datasets.svhn import get_svhn_dataloaders, get_svhn_dataloaders_sample
 from helper.util import adjust_learning_rate, TVLoss
 from helper.util_gen import getDirichl, add_dict
 
-from helper.gen_loops import train_generator, train_joint, train_z_G, train_vae
+from helper.gen_loops import train_generator, train_joint, train_z_G, train_vae, train_coopnet
 from helper.pretrain import init
 from helper.sampling import get_replay_buffer
 
@@ -65,8 +65,8 @@ def parse_option():
     parser.add_argument('--lmda_ebm', default=0.7, type=float, help='Hyperparameter for update EBM.')
     parser.add_argument('--lmda_l2', default=0.01, type=float, help='Hyperparameter for l2-norm for generated loss')
     parser.add_argument('--lmda_tv', default=2.5e-3, type=float, help='Hyperparameter for total variation loss.')
-    parser.add_argument('--lmda_p_x', default=1., type=float, help='Hyperparameter for building p(x)')
-    parser.add_argument('--lmda_p_x_y', default=0., type=float, help='Hyperparameter for building p(x,y)')
+    # parser.add_argument('--lmda_p_x', default=1., type=float, help='Hyperparameter for building p(x)')
+    # parser.add_argument('--lmda_p_x_y', default=0., type=float, help='Hyperparameter for building p(x,y)')
     parser.add_argument('--lmda_e', default=0.1, type=float, help='Hyperparameter for kl divergence of negative student and positive teacher.')
     parser.add_argument('--lc_K', default=5, type=int, help='Sample K steps for policy gradient. ')
     parser.add_argument('--trial', type=str, default='1', help='trial id')
@@ -126,6 +126,9 @@ def parse_option():
     elif config_type == 'vae':
         opt.model_name = '{}_lr_{}_decay_{}_ndf_{}_trial_{}'.format(opt.dataset, opt.exp_params['LR'], opt.exp_params['weight_decay'], opt.model_params['latent_dim'], opt.trial)
         opt.batch_size = opt.exp_params['batch_size']
+
+    elif config_type == 'coopnet':
+        opt.model_name = opt.model_name = '{}_lr_{}_decay_{}_ndf_{}_trial_{}_{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_energy_mode_{}_step_size_{}_g_steps_{}_trial_{}'.format(opt.dataset, opt.exp_params['LR'], opt.exp_params['weight_decay'], opt.model_params['latent_dim'], opt.trial, opt.model_s, opt.dataset, opt.learning_rate_ebm, opt.weight_decay_ebm, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.energy, opt.step_size, opt.g_steps, opt.trial)
 
     else:
         if not opt.joint:
@@ -190,9 +193,12 @@ def setup(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 
-def set_optimizers(opt, model_score, model_G=None, config_type='jem'):
-    if config_type == 'jem':
+def set_optimizers(opt, model_score, model_G=None, config_type='jem', model_s=None):
+    if config_type == 'jem' or config_type == 'coopnet':
         optimizer = optim.Adam(model_score.parameters(), lr=opt.learning_rate_ebm, betas=[0.9, 0.999],  weight_decay=opt.weight_decay_ebm)
+        if config_type == 'coopnet':
+            optimizer_alpha = optim.Adam(model_score.parameters(), lr=opt.exp_params['LR'], betas=[0.9, 0.999],  weight_decay=opt.exp_params['weight_decay'])
+            return optimizer, optimizer_alpha
         return optimizer
     elif config_type == 'gz':
         assert model_G is not None, 'Must set generator in latent code mode.'
@@ -204,7 +210,8 @@ def set_optimizers(opt, model_score, model_G=None, config_type='jem'):
         return optE, optG, lr_scheduleE, lr_scheduleG
     elif config_type == 'vae':
         optimizer = optim.Adam(model_score.parameters(), lr=opt.exp_params['LR'], betas=[0.9, 0.999],  weight_decay=opt.exp_params['weight_decay'])
-        return optimizer
+        optimizer_s = optim.Adam(model_score.parameters(), lr=opt.joint_training['stu_lr'], betas=[0.5, 0.999],  weight_decay=opt.exp_params['weight_decay'])
+        return optimizer, optimizer_s
     else:
         raise NotImplementedError('Not implemented at type {}'.format(config_type))
 
@@ -241,11 +248,11 @@ def main_function(gpu, opt):
     # model = model_dict[opt.model](num_classes=opt.n_cls, norm='batch')
 
     config_type = opt.config.split('/')[-1].split('.')[0]
-    assert config_type in ['gz', 'jem', 'vae']
+    assert config_type in ['gz', 'jem', 'vae', 'coopnet']
     if config_type == 'gz':
         model_score = model_dict['ZE'](args=opt, num_classes=opt.n_cls)
         netG = model_dict['ZGc'](args=opt)
-    elif config_type == 'jem':
+    elif config_type == 'jem' or config_type == 'coopnet':
         if opt.model_s == 'resnet28x10':
             d, w = opt.model_s.split('x')[0][-2:], opt.model_s.split('x')[1]
             model_score = model_dict[opt.model_s](depth=int(d), widen_factor=int(w), num_classes=opt.n_cls, norm=opt.norm)
@@ -254,6 +261,9 @@ def main_function(gpu, opt):
         else:
             model_score = model_dict[opt.model_s](num_classes=opt.n_cls, norm=opt.norm, act=opt.act, multiscale=opt.multiscale)
         netG = None
+        if config_type == 'coopnet':
+            netG = model_dict['cvae'](**opt.model_params)
+
     else:
         model_score = model_dict['cvae'](**opt.model_params)
         netG = None
@@ -274,12 +284,14 @@ def main_function(gpu, opt):
         print(opt.path_t)
         model = load_teacher(opt.path_t, opt)
     elif config_type == 'jem':
-        opt.y = getDirichl(opt.path_t, device=opt.device) if opt.use_py else None
+        opt.y = getDirichl(opt.path_t, device=opt.device)
         if opt.joint:
             model = load_teacher(opt.path_t, opt)
             model_stu = model_dict[opt.model_stu](num_classes=opt.n_cls, norm='batch')
     else:
+        opt.y = getDirichl(opt.path_t, device=opt.device)
         model = load_teacher(opt.path_t, opt)
+        model_stu = model_dict[opt.model_stu](num_classes=opt.n_cls, norm='batch')
     
 
     if torch.cuda.is_available():
@@ -296,12 +308,14 @@ def main_function(gpu, opt):
 
         else:
             model_score = model_score.to(opt.device)
-            if config_type == 'gz':
+            if config_type == 'gz' or config_type == 'coopnet':
                 netG = netG.to(opt.device)
                 model = model.to(opt.device)
             # criterion = criterion.cuda()
             elif config_type == 'vae':
                 model = model.to(opt.device)
+                # model = model.to(opt.device)
+                model_stu = model_stu.to(opt.device)
             else:
                 if opt.joint:
                     model = model.to(opt.device)
@@ -316,6 +330,9 @@ def main_function(gpu, opt):
         criterion = torch.nn.MSELoss(reduction='sum')
     elif config_type == 'vae':
         model_list = [model, model_score]
+
+    elif config_type == 'coopnet':
+        model_list = [model_score, model, netG]
     else:
         if opt.joint:
             model_list = [model, model_stu, model_score]
@@ -337,7 +354,7 @@ def main_function(gpu, opt):
     # routine
     for epoch in range(opt.init_epochs+1, opt.epochs + 1):
         
-        if config_type == 'jem':
+        if config_type == 'jem' or 'coopnet':
             if epoch in opt.lr_decay_epochs_ebm:
                 for param_group in optimizer.param_groups:
                     new_lr = param_group['lr'] * opt.lr_decay_rate_ebm
@@ -358,9 +375,10 @@ def main_function(gpu, opt):
             else:
                 train_loss = train_generator(epoch, train_loader, model_list, optimizer, opt, prior_buffer, logger, local_rank=gpu, device=opt.device)
         elif config_type == 'vae':
-            train_loss = train_vae(model_list, optimizer, opt, train_loader, logger, epoch)
+            train_loss = train_vae(model_list, optimizer[0], opt, train_loader, logger, epoch, model_s=model_stu, optimizer_s=optimizer[1])
+        elif config_type == 'coopnet':
+            train_loss = train_coopnet(model_list, optimizer, opt, train_loader, logger, epoch, prior_buffer)
         else:
-            
             train_loss = train_z_G(epoch, buffer_lists, train_loader, model_list, criterion, optimizer_list, opt, logger, local_rank=gpu, device=opt.device, model_cls=model if opt.joint else None)
             lrE.step(epoch=epoch)
             lrG.step(epoch=epoch)
@@ -389,15 +407,22 @@ def main_function(gpu, opt):
                     "optG": optG.state_dict(),
                     "optE": optE.state_dict()
                 }
+
+            elif config_type == 'coopnet':
+                ckpt_dict = {
+                    "model_state_dict": model_score.state_dict(),
+                    "G_state_dict": netG.state_dict(),
+                    "optG": optimizer[1].state_dict(),
+                    "optE": optimizer[0].state_dict()
+                }
             else:
                 ckpt_dict = {
                     "model_state_dict": model_score.state_dict(),
-                    "optimizer": optimizer.state_dict()
+                    "optimizer": optimizer[0].state_dict(),
+                    "optimizer_stu": optimizer[1].state_dict()
                 }
             if gpu == 0:
                 torch.save(ckpt_dict, os.path.join(opt.save_folder, 'res_epoch_{epoch}.pts'.format(epoch=epoch)))
-
-    
 
 def main():
     opt = parse_option()

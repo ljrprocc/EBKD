@@ -276,6 +276,9 @@ def train_generator(epoch, train_loader, model_list, optimizer, opt, buffer, log
     return losses.avg
 
 def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt, logger, local_rank=None, device=None, model_cls=None):
+    '''
+    Sampling from z~p_{\theta}(z), x~p_{\alpha}(x|z)
+    '''
     model_E, model_G = model_list
     optG, optE = optimizer
 
@@ -424,11 +427,11 @@ def train_z_G(epoch, buffer, train_loader, model_list, criterion, optimizer, opt
     return loss_e
 
 
-def train_vae(model_list, optimizer, opt, train_loader, logger, epoch):
+def train_vae(model_list, optimizer, opt, train_loader, logger, epoch, model_s=None, optimizer_s=None):
     model_t, model_vae = model_list
-    losses = AverageMeter()
     model_vae.train()
     model_t.eval()
+    joint = opt.joint_training['open']
     plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
     train_loader, train_labeled_loader = train_loader
 
@@ -455,10 +458,39 @@ def train_vae(model_list, optimizer, opt, train_loader, logger, epoch):
             p_pos = F.log_softmax(logit_t_pos, 1)
             p_neg = F.softmax(logit_t, 1)
             kl_loss = F.kl_div(p_pos, p_neg)
-            total_loss += 0.1 * l_cls + 1. * kl_loss
+            acc = (logit_t.argmax(1) == labels).sum() / opt.batch_size
+            if joint:
+                assert model_s is not None
+                model_s.eval()
+                logit_s = model_s(sampled_imgs)
+                p_stu = F.softmax(logit_s / 4., 1)
+                p_tea = F.log_softmax(logit_t / 4., 1)
+                kd_div = F.kl_div(p_tea, p_stu)
+                total_loss -= 0.1 * kd_div
+
+            # tv_loss = TVLoss()(sampled_imgs).mean()
+            total_loss += opt.lamda_cls * l_cls + opt.lamda_kl * kl_loss
 
         total_loss.backward()
         optimizer.step()
+        if joint:
+            model_s.train()
+            # model_vae.eval()
+            model_s.zero_grad()
+            sampled_imgs = model_vae.sample(num_samples=opt.batch_size, current_device=curr_device, labels=labels, train=False)
+            logit_t = model_t(sampled_imgs)
+            logit_s = model_s(sampled_imgs)
+            stu_cls = torch.nn.CrossEntropyLoss()(logit_s, labels)
+            p_stu = F.softmax(logit_s / 4, 1)
+            p_tea = F.log_softmax(logit_t / 4, 1)
+            kd_div = F.kl_div(p_tea, p_stu)
+            kd_loss = opt.joint_training['alpha'] * stu_cls + opt.joint_training['beta'] * kd_div
+            logit_s_real = model_s(x_fixed)
+            stu_acc = (logit_s_real.argmax(1) == y_fixed).sum() / opt.batch_size
+            kd_loss.backward()
+            optimizer_s.step()
+            
+            
         global_iter = len(train_loader) * epoch + idx
         if idx % opt.print_freq == 0:
             logger.log_value('total_loss', train_loss['loss'], global_iter)
@@ -469,7 +501,11 @@ def train_vae(model_list, optimizer, opt, train_loader, logger, epoch):
             if opt.joint:
                 logger.log_value('l_cls', l_cls, global_iter)
                 logger.log_value('l_kl', kl_loss)
-                print_str += 'Classification Loss = {:.4f}\t +/- divergence = {:.4f}'.format(l_cls, kl_loss)
+                logger.log_value('acc', acc)
+                print_str += 'Classification Loss = {:.4f}\t +/- divergence = {:.4f}\t Teacher Accuracy = {:.4f}\t'.format(l_cls, kl_loss, acc)
+                if joint:
+                    print_str += 'Student Accuracy = {:.4f}\t'.format(stu_acc)
+                    logger.log_value('stu acc', stu_acc)
             print(print_str)
             if opt.plot_uncond:
                 y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(curr_device)
@@ -495,7 +531,125 @@ def sample_vae(model, opt, n_samples=30000):
     for j in tqdm.tqdm(range(num_img_per_class)):
         temp_x = model.sample(opt.n_cls, opt.device, labels=y, train=False)
         for i, x in enumerate(temp_x):
-            plot('{}/vae_samples/samples_label_{}_{}.png'.format(opt.save_folder, i, j), x.unsqueeze(0))   
+            plot('{}/vae_samples/samples_label_{}_{}.png'.format(opt.save_folder, i, j), x.unsqueeze(0))
+
+def train_coopnet(model_list, optimizer_list, opt, train_loader, logger, epoch, buffer):
+    model_s, model_t, model_vae = model_list
+    model_vae.train()
+    model_t.eval()
+    model_s.train()
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+    fpxs = AverageMeter()
+    fqxs = AverageMeter()
+    fpxys = AverageMeter()
+    fqxys = AverageMeter()
+    accs = AverageMeter()
+    # joint = opt.joint_training['open']
+    plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
+    train_loader, train_labeled_loader = train_loader
+
+    x_fixed, y_fixed = next(train_labeled_loader)
+    x_fixed = x_fixed.to(opt.device)
+    y_fixed = y_fixed.to(opt.device)
+    train_imgs = len(train_loader.dataset)
+    optimizer_theta, optimizer_alpha = optimizer_list
+    end = time.time()
+    sample_q = langevin_at_x(opt, device=opt.device)
+    for (idx, batch) in enumerate(train_loader):
+        real_img, labels = batch
+        curr_device = opt.device
+        real_img = real_img.to(curr_device)
+        labels = labels.to(curr_device)
+
+        # update slow sampler(ebm)
+        # optimizer_theta.zero_grad()
+        if idx <= opt.warmup_iters:
+            lr = opt.learning_rate_ebm * idx / float(opt.warmup_iters)
+            for param_group in optimizer_theta.param_groups:
+                param_group['lr'] = lr
+        data_time.update(time.time() - end)
+        nldata = train_labeled_loader.__next__()
+        x_lab, y_lab = nldata[0], nldata[1] 
+        x_lab, y_lab = x_lab.to(curr_device), y_lab.to(curr_device)
+
+        loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model_list, real_img, x_lab, y_lab, y_p=labels)   
+        optimizer_theta.zero_grad()
+        losses.update(loss_ebm, real_img.size(0))
+        model_s.zero_grad()
+        loss_ebm.backward()
+        optimizer_theta.step()
+        if opt.lmda_p_x > 0:
+            fpx, fqx = cache_p_x
+            fpxs.update(fpx, real_img.size(0))
+            fqxs.update(fqx, real_img.size(0))
+        if opt.lmda_p_x_y > 0:
+            fpxy, fqxy = cache_p_y
+            fpxys.update(fpxy, real_img.size(0))
+            fqxys.update(fqxy, real_img.size(0))
+
+        l_p_x, l_p_x_y, l_cls = ls
+
+        acc = torch.sum(torch.argmax(logit, 1) == y_lab).item() / real_img.size(0)
+        accs.update(acc, real_img.size(0))
+        global_iter = epoch * len(train_loader) + idx
+        if global_iter % opt.print_freq == 0:
+            logger.log_value('l_p_x', l_p_x, global_iter)
+            logger.log_value('l_p_x_y', l_p_x_y, global_iter)
+            logger.log_value('l_cls', l_cls, global_iter)
+            logger.log_value('accuracy', acc, global_iter)
+        # update fast initializer(vae)
+        optimizer_alpha.zero_grad()
+
+        results = model_vae(real_img, labels = labels)
+        total_loss = 0.
+        train_loss = model_vae.loss_function(*results, M_N = opt.batch_size / train_imgs, optimizer_idx = 0, batch_idx = idx)
+        total_loss += train_loss['loss']
+
+        total_loss.backward()
+        optimizer_alpha.step()
+            
+            
+        global_iter = len(train_loader) * epoch + idx
+        if idx % opt.print_freq == 0:
+            logger.log_value('total_loss', train_loss['loss'], global_iter)
+            logger.log_value('Rec_loss', train_loss['Reconstruction_Loss'], global_iter)
+            logger.log_value('KL_Loss', train_loss['KLD'], global_iter)
+
+            print_str = 'Epoch: {} / {}, Data: {} / {}, total_loss = {:.4f}\t Reconstruction_loss = {:.4f}\t KL_loss = {:.4f}\t'.format(epoch, opt.epochs, idx, len(train_loader), train_loss['loss'], train_loss['Reconstruction_Loss'], train_loss['KLD'])
+            print_str += 'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\tData {data_time.val:.3f} ({data_time.avg:.3f})\tLoss {loss.val:.4f} ({loss.avg:.4f})\n'.format(epoch, idx, len(train_loader), batch_time=batch_time, data_time=data_time, loss=losses)
+            if opt.lmda_p_x > 0:
+                # print(fqxs.count)
+                print_str += 'p(x) f(x+) {fpx.val:.4f} ({fpx.avg:.4f})\t'.format(fpx=fpxs)
+                print_str += 'f(x-) {fqx.val:.4f} ({fqx.avg:.4f})\n'.format(fqx=fqxs)
+            if opt.lmda_p_x_y > 0:
+                print_str += 'p(x) f(x+) {fpx.val:.4f} ({fpx.avg:.4f})\t'.format(fpx=fpxys)
+                print_str += 'f(x-) {fqxy.val:.4f} ({fqxy.avg:.4f})\n'.format(fqxy=fqxys)
+            print_str += 'Acc: {accs.val:.4f} ({accs.avg:.4f})\n'.format(accs=accs)
+            
+                # print(string)
+            
+            
+            print(print_str)
+            if opt.plot_uncond:
+                y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(curr_device)
+                x_q = model_vae.sample(opt.batch_size, curr_device, labels = y_q)
+                x_q = sample_q(model_s, buffer, y=y_q, init_x=x_q)
+                plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q)
+            if opt.plot_cond:  # generate class-conditional samples
+                y = torch.arange(0, opt.n_cls).to(curr_device)
+                # print(y.shape)
+                x_q_y = model_vae.sample(opt.n_cls, curr_device, labels = y, train=False)
+                x_q_y, _ = sample_q(model_s, buffer, y=y, init_x=x_q_y)
+                plot('{}/x_q_y{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q_y)
+
+            # x_rec = model_vae.generate(x_fixed, labels=y_fixed)
+            # plot('{}/x_rec_fixed{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_rec)
+
+    return train_loss['loss']
 
 
 def validate_G(model, replay_buffer, opt, eval_loader=None):

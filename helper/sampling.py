@@ -93,10 +93,11 @@ def langevin_at_x(opts, device=None):
         n_cls = 10
     sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
-    def sample_p_0(replay_buffer, bs, y=None):
+    def sample_p_0(replay_buffer, bs, y=None, init_x=None):
         if opts.short_run or len(replay_buffer) == 0:
             return init_random((bs, nc, im_size, im_size)), []
             # return init_random((bs, l)), []
+        
         buffer_size = len(replay_buffer) if y is None else len(replay_buffer) // opts.n_cls
         # print(replay_buffer)
         inds = torch.randint(0, buffer_size, (bs,))
@@ -110,7 +111,7 @@ def langevin_at_x(opts, device=None):
                 res_samples = augment(opts.dataset, sample)
                 samples.append(res_samples)
             buffer_samples = torch.stack(samples, 0)
-        random_samples = init_random((bs, nc, im_size, im_size))
+        random_samples = init_random((bs, nc, im_size, im_size)) if init_x is None else init_x.cpu()
         # s = (bs, opts.latent_dim)
         # random_samples = init_random(s)
         choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None, None, None]
@@ -120,7 +121,7 @@ def langevin_at_x(opts, device=None):
         else:
             return samples.cuda(), inds
 
-    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False, open_clip_grad=None, train=False):
+    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False, open_clip_grad=None, train=False, init_x=None):
         """this func takes in replay_buffer now so we have the option to sample from
         scratch (i.e. replay_buffer==[]).  See test_wrn_ebm.py for example.
         """
@@ -128,7 +129,7 @@ def langevin_at_x(opts, device=None):
         # get batch size
         bs = opts.batch_size if y is None else y.size(0)
         # generate initial samples and buffer inds of those samples (if buffer is used)
-        init_sample, buffer_inds = sample_p_0(replay_buffer, bs=bs, y=y)
+        init_sample, buffer_inds = sample_p_0(replay_buffer, bs=bs, y=y, init_x=init_x)
         x_k = torch.autograd.Variable(init_sample, requires_grad=True).to(device)
         # sgld
         samples = []
@@ -143,8 +144,8 @@ def langevin_at_x(opts, device=None):
             # print((now_step_size * f_prime + noise).mean())
             if y is not None:
                 samples.append((x_k, x_k_pre, noise))
-            # if open_clip_grad:
-            #     torch.nn.utils.clip_grad_norm_(f.parameters(), max_norm=open_clip_grad)
+            if open_clip_grad:
+                torch.nn.utils.clip_grad_norm_(f.parameters(), max_norm=open_clip_grad)
                 # plot('{}/debug_{}.png'.format(opts.save_folder, k))
                 # exit(-1)
             x_k_pre = x_k.detach()

@@ -16,4 +16,4 @@
 
 # python train_ebm.py --config ./configs/gz.yaml --trial short_run_4 --save_freq 20 --epochs 100 --batch_size 128  --warmup_iters 1000 --num_workers 4 --print_freq 20 --gpu 1
 
-python train_ebm.py --config ./configs/jem.yaml --trial sr_2 --save_freq 20 --epochs 500 --warmup_iters 1000 --num_workers 4 --print_freq 20 --gpu 6
+python train_ebm.py --config ./configs/coopnet.yaml --trial 1 --save_freq 10 --epochs 200 --warmup_iters 1000 --num_workers 4 --print_freq 50
