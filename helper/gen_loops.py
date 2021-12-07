@@ -535,7 +535,7 @@ def sample_vae(model, opt, n_samples=30000):
 
 def train_coopnet(model_list, optimizer_list, opt, train_loader, logger, epoch, buffer):
     model_s, model_t, model_vae = model_list
-    model_vae.train()
+    model_vae.eval()
     model_t.eval()
     model_s.train()
     batch_time = AverageMeter()
@@ -603,6 +603,8 @@ def train_coopnet(model_list, optimizer_list, opt, train_loader, logger, epoch, 
             logger.log_value('accuracy', acc, global_iter)
         # update fast initializer(vae)
         optimizer_alpha.zero_grad()
+        model_vae.train()
+        model_s.eval()
 
         results = model_vae(real_img, labels = labels)
         total_loss = 0.
@@ -615,6 +617,7 @@ def train_coopnet(model_list, optimizer_list, opt, train_loader, logger, epoch, 
             
         global_iter = len(train_loader) * epoch + idx
         if idx % opt.print_freq == 0:
+            model_vae.eval()
             logger.log_value('total_loss', train_loss['loss'], global_iter)
             logger.log_value('Rec_loss', train_loss['Reconstruction_Loss'], global_iter)
             logger.log_value('KL_Loss', train_loss['KLD'], global_iter)

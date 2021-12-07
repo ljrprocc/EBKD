@@ -40,7 +40,6 @@ def parse_option():
     parser.add_argument('--save_freq', type=int, default=40, help='save frequency')
     parser.add_argument('--num_workers', type=int, default=8, help='num of workers to use')
     parser.add_argument('--epochs', type=int, default=240, help='number of training epochs')
-    parser.add_argument('--init_epochs', type=int, default=0, help='init training for two-stage methods and resume')
     parser.add_argument('--warmup_iters', type=int, default=200, help="number of iters to linearly increase learning rate, -1 set no warmup.")
     # parser.add_argument('--data_noise', type=float, default=0.03, help="The adding noise for sampling data point x~p_data.")
 
@@ -270,8 +269,8 @@ def main_function(gpu, opt):
     
     if config_type != 'vae':
         model_score = model_dict['Gen'](model=model_score, n_cls=opt.n_cls)
-        prior_buffer, _ = get_replay_buffer(opt, model=model_score, config_type=config_type)
-        post_buffer, _ = get_replay_buffer(opt, model=model_score, config_type=config_type)
+        prior_buffer, _ = get_replay_buffer(opt, model=model_score, config_type=config_type, model_G=netG)
+        post_buffer, _ = get_replay_buffer(opt, model=model_score, config_type=config_type, model_G=netG)
         buffer_lists = [prior_buffer, post_buffer]
     
     
@@ -333,11 +332,13 @@ def main_function(gpu, opt):
 
     elif config_type == 'coopnet':
         model_list = [model_score, model, netG]
+        optimizer_adjust = optimizer[0]
     else:
         if opt.joint:
             model_list = [model, model_stu, model_score]
         else:
             model_list = [model_score]
+        optimizer_adjust = optimizer
     # optimizer = nn.DataParallel(optimizer)
     # criterion = TVLoss()
 
@@ -356,10 +357,10 @@ def main_function(gpu, opt):
         
         if config_type == 'jem' or 'coopnet':
             if epoch in opt.lr_decay_epochs_ebm:
-                for param_group in optimizer.param_groups:
+                for param_group in optimizer_adjust.param_groups:
                     new_lr = param_group['lr'] * opt.lr_decay_rate_ebm
                     param_group['lr'] = new_lr
-            adjust_learning_rate(epoch, opt, optimizer)
+            adjust_learning_rate(epoch, opt, optimizer_adjust)
         if (not ddp) or gpu == 0:
             print("==> training...")
 
@@ -413,7 +414,7 @@ def main_function(gpu, opt):
                     "model_state_dict": model_score.state_dict(),
                     "G_state_dict": netG.state_dict(),
                     "optG": optimizer[1].state_dict(),
-                    "optE": optimizer[0].state_dict()
+                    "optE": optimizer[0].state_dict(),
                 }
             else:
                 ckpt_dict = {

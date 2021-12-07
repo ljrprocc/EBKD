@@ -53,9 +53,10 @@ def init_random(s):
     # print(s)
     return torch.FloatTensor(*s).uniform_(-1, 1)
 
-def get_replay_buffer(opt, model=None, local_rank=None, config_type='jem'):
+def get_replay_buffer(opt, model=None, local_rank=None, config_type='jem', model_G=None):
     
     nc = 3
+    bs = opt.capcitiy
     if opt.dataset == 'cifar100' or opt.dataset == 'cifar10' or opt.dataset == 'svhn':
         im_size = 32
     else:
@@ -64,7 +65,7 @@ def get_replay_buffer(opt, model=None, local_rank=None, config_type='jem'):
         im_size = 1
         nc = opt.nz
     if not opt.load_buffer_path:
-        bs = opt.capcitiy
+        
         # replay_buffer = init_random((bs, opt.latent_dim))
         replay_buffer = init_random((bs, nc, im_size, im_size))
     else:
@@ -74,9 +75,14 @@ def get_replay_buffer(opt, model=None, local_rank=None, config_type='jem'):
         if ddp:
             map_location = {'cuda:%d' % 0: 'cuda:%d' % local_rank}
         ckpt_dict = torch.load(opt.load_buffer_path, map_location=map_location)
-        replay_buffer = ckpt_dict["replay_buffer"]
+        if "replay_buffer" in ckpt_dict.keys():
+            replay_buffer = ckpt_dict["replay_buffer"]
+        else:
+            replay_buffer = init_random((bs, nc, im_size, im_size))
         if model:
             model.load_state_dict(ckpt_dict["model_state_dict"])
+            if model_G is not None:
+                model_G.load_state_dict(ckpt_dict["G_state_dict"])
     return replay_buffer, model
 
 def langevin_at_x(opts, device=None):
@@ -95,6 +101,8 @@ def langevin_at_x(opts, device=None):
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     def sample_p_0(replay_buffer, bs, y=None, init_x=None):
         if opts.short_run or len(replay_buffer) == 0:
+            if init_x is not None:
+                return init_x, []
             return init_random((bs, nc, im_size, im_size)), []
             # return init_random((bs, l)), []
         
@@ -115,13 +123,14 @@ def langevin_at_x(opts, device=None):
         # s = (bs, opts.latent_dim)
         # random_samples = init_random(s)
         choose_random = (torch.rand(bs) < opts.reinit_freq).float()[:, None, None, None]
+        
         samples = choose_random * random_samples + (1 - choose_random) * buffer_samples
         if device:
             return samples.to(device), inds
         else:
             return samples.cuda(), inds
 
-    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_debug=False, open_clip_grad=None, train=False, init_x=None):
+    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, use_lc=False, open_clip_grad=None, init_x=None):
         """this func takes in replay_buffer now so we have the option to sample from
         scratch (i.e. replay_buffer==[]).  See test_wrn_ebm.py for example.
         """
@@ -172,7 +181,7 @@ def freshh(model, opt, device, replay_buffer=None, save=True):
     print(replay_buffer.shape)
     y = torch.arange(0, opt.n_cls).to(device)
     if opt.resume != 'none':
-        ckpt = torch.load(opt.resume)
+        ckpt = torch.load(opt.resume, map_location=device)
         replay_buffer = ckpt['replay_buffer']
     for i in tqdm.tqdm( range(opt.init_epoch,opt.n_sample_steps)):
         samples, _ = sample_q(model, replay_buffer, y=y)
