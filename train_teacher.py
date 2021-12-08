@@ -19,7 +19,6 @@ from datasets.cifar100 import get_cifar100_dataloaders
 from datasets.svhn import get_svhn_dataloaders
 from datasets.imagenet import get_imagenet_dataloader, get_dataloader_sample
 from train_student import load_teacher
-from distiller_zoo import EBLoss
 
 from helper.util import adjust_learning_rate, accuracy, AverageMeter
 from helper.loops import train_vanilla as train, validate
@@ -59,6 +58,7 @@ def parse_option():
     parser.add_argument('--mode', type=str, default='D', choices=['D', 'G'])
     parser.add_argument('--energy', default='mcmc', type=str, help='Sampling method to update EBM.')
     opt = parser.parse_args()
+    opt.df_folder = '/data/lijingru/img_sample_eval_10000/'
     
     # set different learning rate from these 4 models
     if opt.model in ['MobileNetV2', 'ShuffleV1', 'ShuffleV2']:

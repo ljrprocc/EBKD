@@ -49,7 +49,7 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     sqrt = lambda x: int(torch.sqrt(torch.tensor([x])))
     plot = lambda p,x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=sqrt(x.size(0)))
     n_cls = opt.n_cls
-    meta_buffer_size = opt.buffer_size // n_cls
+    # meta_buffer_size = opt.buffer_size // n_cls
     model.eval()
     log_dir = os.path.join(opt.save_folder, 'log.txt')
     f = open(log_dir, 'w')
@@ -58,8 +58,8 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
     
     
     n_cls = opt.n_cls
-    n_it = opt.buffer_size // 100
-    n_range = opt.buffer_size // n_cls
+    n_it = opt.capcitiy // 100
+    # n_range = opt.buffer_size // n_cls
     all_y = []
     # n_cls = opt.n_cls
     for i in range(n_it):
@@ -104,22 +104,6 @@ def cond_samples(model, replay_buffer, device, opt, fresh=False, use_buffer=Fals
             print('Successfully save the result.')
 
     return replay_buffer
-
-def update_lc_theta(opt, x_q, t_logit, y_gt, s_logit, t_logit_true):
-    # l_tv = get_image_prior_losses(x_q)
-    n_cls = opt.n_cls
-    y_one_hot = torch.eye(n_cls)[y_gt].to(x_q.device)
-    l_cls = -torch.sum(torch.log_softmax(t_logit, 1) * y_one_hot, 1)
-    bs = x_q.size(0)
-    # l_2 = torch.norm(x_q.view(bs, -1), dim=-1)
-    # print(l_cls.shape, l_2.shape, l_tv.shape)
-    # KL(p_t(y|x) || p_s(y|x))
-    # l_e = torch.sum(torch.softmax(t_logit, 1) * (torch.log_softmax(s_logit, 1)- torch.log_softmax(t_logit_true, 1)), 1)
-    l_e = torch.sum(torch.softmax(t_logit, 1) * (torch.log_softmax(s_logit, 1) - torch.log_softmax(t_logit, 1)), 1)
-    lc = 0.1*l_cls + opt.lmda_e * l_e
-    # print(lc.mean(), (lc - lc.mean()).mean())
-    # c = lc.mean()
-    return lc, (l_cls, l_e)
 
 def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=None):
     L = 0

@@ -9,7 +9,54 @@ import tqdm
 from torchvision import transforms
 from PIL import Image
 from torch import nn
+import torch.nn.functional as F
 import os
+
+def get_image_prior_losses(inputs_jit):
+    # COMPUTE total variation regularization loss
+    diff1 = inputs_jit[:, :, :, :-1] - inputs_jit[:, :, :, 1:]
+    diff2 = inputs_jit[:, :, :-1, :] - inputs_jit[:, :, 1:, :]
+    diff3 = inputs_jit[:, :, 1:, :-1] - inputs_jit[:, :, :-1, 1:]
+    diff4 = inputs_jit[:, :, :-1, :-1] - inputs_jit[:, :, 1:, 1:]
+
+    loss_var_l2 = torch.norm(diff1) + torch.norm(diff2) + torch.norm(diff3) + torch.norm(diff4)
+    loss_var_l1 = (diff1.abs() / 255.0).mean() + (diff2.abs() / 255.0).mean() + (
+            diff3.abs() / 255.0).mean() + (diff4.abs() / 255.0).mean()
+    loss_var_l1 = loss_var_l1 * 255.0
+    return loss_var_l1, loss_var_l2
+
+def update_lc_theta(opt, x_q, t_logit, y_gt, s_logit):
+    # l_tv = get_image_prior_losses(x_q)
+    n_cls = opt.n_cls
+    bs = x_q.shape[0]
+    y_one_hot = torch.eye(n_cls)[y_gt].to(x_q.device)
+    l_cls = -torch.sum(torch.log_softmax(t_logit, 1) * y_one_hot, 1).mean()
+    # bs = x_q.size(0)
+    # l_2 = torch.norm(x_q.view(bs, -1), dim=-1)
+    # print(l_cls.shape, l_2.shape, l_tv.shape)
+    # KL(p_t(y|x) || p_s(y|x))
+    # l_e = torch.sum(torch.softmax(t_logit, 1) * (torch.log_softmax(s_logit, 1)- torch.log_softmax(t_logit_true, 1)), 1)
+    kl_loss = torch.nn.KLDivLoss(reduction='batchmean').cuda()
+    T = 3.0
+    P = F.softmax(t_logit / T, 1)
+    Q = F.softmax(s_logit / T, 1)
+    M = 0.5 * (P + Q)
+
+    P = torch.clamp(P, 0.01, 0.99)
+    Q = torch.clamp(Q, 0.01, 0.99)
+    M = torch.clamp(M, 0.01, 0.99)
+    eps = 0.0
+    loss_e = 0.5 * kl_loss(torch.log(P + eps), M) + 0.5 * kl_loss(torch.log(Q + eps), M)
+    # JS criteria - 0 means full correlation, 1 - means completely different
+    l_e = 1.0 - torch.clamp(loss_e, 0.0, 1.0)
+    l_tv, l2 = get_image_prior_losses(x_q)
+    l2_reg = torch.norm(x_q.view(bs, -1), 1).mean()
+    loss_aux = opt.lmda_adi * l_e + opt.lmda_tv * l_tv + opt.lmda_l2 * l2 + opt.lmda_norm * l2_reg
+    # l_e = torch.sum(torch.softmax(t_logit, 1) * (torch.log_softmax(s_logit, 1) - torch.log_softmax(t_logit, 1)), 1)
+    lc = l_cls + loss_aux
+    # print(lc.mean(), (lc - lc.mean()).mean())
+    # c = lc.mean()
+    return lc, (l_cls, l_e, l_tv, l2, l2_reg)
 
 def get_color_distortion(s=1.0):
         # s is the strength of color distortion.
@@ -130,13 +177,14 @@ def langevin_at_x(opts, device=None):
         else:
             return samples.cuda(), inds
 
-    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, use_lc=False, open_clip_grad=None, init_x=None):
+    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_clip_grad=None, init_x=None, other_models=None):
         """this func takes in replay_buffer now so we have the option to sample from
         scratch (i.e. replay_buffer==[]).  See test_wrn_ebm.py for example.
         """
         f.eval()
         # get batch size
         bs = opts.batch_size if y is None else y.size(0)
+        use_lc = opts.use_lc
         # generate initial samples and buffer inds of those samples (if buffer is used)
         init_sample, buffer_inds = sample_p_0(replay_buffer, bs=bs, y=y, init_x=init_x)
         x_k = torch.autograd.Variable(init_sample, requires_grad=True).to(device)
@@ -146,6 +194,17 @@ def langevin_at_x(opts, device=None):
         x_k_pre = init_sample
         # print(x_k.device, y.device)
         for k in range(n_steps):
+            negative_free_energy = f(x_k, y=y)[0].sum()
+            if use_lc:
+                assert other_models is not None
+                t, s = other_models
+                t_logit = t(x_k)
+                s_logit = s(x_k)
+                lc, a = update_lc_theta(opt=opts, x_q=x_k, y_gt=y, s_logit=s_logit, t_logit = t_logit)
+                # la, lb = a
+                # print(la, lb, lc)
+                # print(negative_free_energy, lc)
+                negative_free_energy -= opts.lmda_lc * lc
             f_prime = torch.autograd.grad(f(x_k, y=y)[0].sum(), [x_k], retain_graph=True)[0]
             noise = 0.01 * torch.randn_like(x_k)
             x_k = x_k + now_step_size * f_prime + noise

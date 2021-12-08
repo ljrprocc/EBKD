@@ -11,6 +11,7 @@ import torchvision.transforms as T
 import torchvision.utils as vutils
 import random
 import tqdm
+import shutil
 
 from math import sqrt
 sys.path.append('..')
@@ -633,9 +634,7 @@ def train_coopnet(model_list, optimizer_list, opt, train_loader, logger, epoch, 
                 print_str += 'f(x-) {fqxy.val:.4f} ({fqxy.avg:.4f})\n'.format(fqxy=fqxys)
             print_str += 'Acc: {accs.val:.4f} ({accs.avg:.4f})\n'.format(accs=accs)
             
-                # print(string)
-            
-            
+            # print(string)
             print(print_str)
             if opt.plot_uncond:
                 y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(curr_device)
@@ -673,4 +672,46 @@ def validate_G(model, replay_buffer, opt, eval_loader=None):
         f.write('{:.4f} +- {:.4f}'.format(mean, var))
         f.close()
     
+    return replay_buffer
+
+def generation_stage(model_lists, replay_buffer, opt):
+    import numpy as np
+    import matplotlib.pyplot as plt
+    model, s, t = model_lists
+
+    device = opt.device
+    sample_q = langevin_at_x(opts=opt, device=device)
+    # replay_buffer = ckpt_energy['replay_buffer'].cpu()
+    #replay_buffer = init_random((opt.buffer_size, 3, 32, 32))
+    # print(replay_buffer.shape)
+    y = torch.arange(0, opt.n_cls).to(device)
+
+    plot = lambda p, x: vutils.save_image(torch.clamp(x, -1, 1), p, normalize=True, nrow=int(sqrt(x.size(0))))
+
+    freshh_epochs = opt.epochs
+    for i in range(freshh_epochs):
+        replay_buffer = replay_buffer.cpu()
+        samples, _ = sample_q(model, replay_buffer, y=y, other_models=(s, t))
+        if i % 200 == 0:
+            if os.path.exists(opt.save_dir):
+                # os.rmdir(opt.save_dir)\
+                shutil.rmtree(opt.save_dir)
+                os.mkdir(opt.save_dir)
+            print('Epoch {} / {} ****'.format(i, freshh_epochs))
+            # buffer_size = len(replay_buffer)
+            # inds = torch.randint(0, buffer_size, (25,))
+            plot(os.path.join(opt.save_folder, "res_epoch_{}.jpg".format(i)), samples)
+            # img = np.transpose(imgs, (1,2,0))
+            replay_buffer = cond_samples(model, replay_buffer, device, opt, use_buffer=True)
+            test_folder = opt.save_dir
+            dataset = CIFAR100Gen(
+                root=test_folder,
+                transform=T.Compose([
+                    T.ToTensor(),
+                    T.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+                ])
+            )
+            mean, var = inception_score(dataset, device, resize=True, splits=3, batch_size=8)
+            print('IS: {} +- {}'.format(mean, var))
+
     return replay_buffer
