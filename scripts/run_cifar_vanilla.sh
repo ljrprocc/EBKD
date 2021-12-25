@@ -4,7 +4,7 @@
 
 # CUDA_VISIBLE_DEVICES=3 python train_teacher.py --model vgg13 --batch_size 512 --dataset svhn --print_freq 20 --learning_rate_ebm 0.01 --epochs 100 --lr_decay_epochs_ebm 50,75
 
-# CUDA_VISIBLE_DEVICES=3 python train_teacher.py --model resnet32x4 --batch_size 512 --dataset svhn --print_freq 20 --learning_rate_ebm 0.01 --epochs 100 --lr_decay_epochs_ebm 50,75
+# CUDA_VISIBLE_DEVICES=2 python train_teacher.py --model resnet32x4 --batch_size 1024 --dataset cifar100 --print_freq 20 --learning_rate_ebm 0.01 --epochs 300 --lr_decay_epochs_ebm 100,150,200
 
 # CUDA_VISIBLE_DEVICES=3 python train_teacher.py --model wrn_40_2 --batch_size 512 --dataset svhn --print_freq 20 --learning_rate_ebm 0.01 --epochs 100 --lr_decay_epochs_ebm 50,75
 
@@ -14,7 +14,7 @@
 
 # CUDA_VISIBLE_DEVICES=3 python train_teacher.py --model resnet110 --batch_size 512 --dataset svhn --print_freq 20 --learning_rate_ebm 0.01 --epochs 100 --lr_decay_epochs_ebm 50,75
 
-CUDA_VISIBLE_DEVICES=2 python train_teacher.py --model resnet8x4 --batch_size 1024 --dataset cifar100 --print_freq 10 --learning_rate_ebm 0.01 --epochs 240 --lr_decay_epochs_ebm 150,180
+CUDA_VISIBLE_DEVICES=2 python train_teacher.py --model resnet32 --batch_size 1024 --dataset cifar100 --print_freq 10 --learning_rate_ebm 0.01 --epochs 300 --lr_decay_epochs_ebm 150,180
 
 # python train_teacher.py --model resnet110
 

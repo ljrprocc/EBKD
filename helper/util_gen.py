@@ -111,6 +111,10 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
         model_t, model_s, model = models
         model_t.eval()
         model_s.eval()
+    elif mode == 'coopnet':
+        model, model_t, model_vae = models
+        model_vae.eval()
+        model.train()
     else:
         model = models[0]
         # model_t.eval()
@@ -121,9 +125,13 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
     # P(x) modeling
     if opt.lmda_p_x > 0:
         y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(x_p.device)
+        if mode == 'coopnet':
+            x_init = model_vae.sample(opt.batch_size, opt.device, labels=y_q, train=False)
+        else:
+            x_init = None
         # The process of get x_q~p_{\theta}(x), stochastic process of x*=argmin_{x}(E_{\theta}(x))
         # print(replay_buffer.shape, y_q.shape)
-        x_q, samples = sample_q(model, replay_buffer, y=y_q, train=True)
+        x_q, samples = sample_q(model, replay_buffer, y=y_q, init_x=x_init)
         # print(x_p.device, opt.y.device)
         f_p = model(x_p, py=opt.y)[0]
         f_q = model(x_q, py=opt.y)[0]
@@ -141,7 +149,11 @@ def update_theta(opt, replay_buffer, models, x_p, x_lab, y_lab, mode='sep', y_p=
     # Followed by the idea of jem
 
     if opt.lmda_p_x_y > 0:
-        x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab, train=True)
+        if mode == 'coopnet':
+            x_init_lab = model_vae.sample(opt.batch_size, opt.device, labels=y_lab)
+        else:
+            x_init_lab = None
+        x_q_lab, samples = sample_q(model, replay_buffer, y=y_lab, init_x=x_init_lab)
         # -E_{\theta}, bigger better.
         fpxys = model(x_lab, y_lab, py=opt.y)[0]
         fqxys = model(x_q_lab, y_lab, py=opt.y)[0]

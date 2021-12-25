@@ -7,21 +7,24 @@ act: swish
 norm: none
 g_steps: 20
 step_size: 1
-capcitiy: 20000
+capcitiy: 40000
 reinit_freq: 0.05
 cls: cls
 energy: mcmc
 use_py: False
+use_lc: False
 data_noise: 0.03
 batch_size: 256
 plot_cond: True
 lmda_p_x: 1.
 lmda_p_x_y: 0.
-path_t: /data/lijingru/EBKD/save/models/resnet32x4_vanilla/ckpt_epoch_240.pth
+# path_t: /data/lijingru/EBKD/save/models/resnet32x4_vanilla/ckpt_epoch_240.pth
+path_t: /data/lijingru/EBKD/save/models/resnet32x4_cifar10_lr_0.01_decay_0.0005_trial_0/ckpt_epoch_240.pth
+dataset: cifar10
 learning_rate_ebm: 0.0003
 weight_decay_ebm: 0
 lr_decay_epochs_ebm: 100,150
 lr_decay_rate_ebm: 0.3
 short_run: False
 init_epochs: 0
-gpu: 4
+gpu: 6

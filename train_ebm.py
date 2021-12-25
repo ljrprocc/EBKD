@@ -415,6 +415,7 @@ def main_function(gpu, opt):
                     "G_state_dict": netG.state_dict(),
                     "optG": optimizer[1].state_dict(),
                     "optE": optimizer[0].state_dict(),
+                    "replay_buffer": prior_buffer
                 }
             else:
                 ckpt_dict = {

@@ -577,7 +577,7 @@ def train_coopnet(model_list, optimizer_list, opt, train_loader, logger, epoch, 
         x_lab, y_lab = nldata[0], nldata[1] 
         x_lab, y_lab = x_lab.to(curr_device), y_lab.to(curr_device)
 
-        loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model_list, real_img, x_lab, y_lab, y_p=labels)   
+        loss_ebm, cache_p_x, cache_p_y, logit, ls = update_theta(opt, buffer, model_list, real_img, x_lab, y_lab, y_p=labels, mode='coopnet')   
         optimizer_theta.zero_grad()
         losses.update(loss_ebm, real_img.size(0))
         model_s.zero_grad()
@@ -638,7 +638,7 @@ def train_coopnet(model_list, optimizer_list, opt, train_loader, logger, epoch, 
             print(print_str)
             if opt.plot_uncond:
                 y_q = torch.randint(0, opt.n_cls, (opt.batch_size,)).to(curr_device)
-                x_q = model_vae.sample(opt.batch_size, curr_device, labels = y_q)
+                x_q = model_vae.sample(opt.batch_size, curr_device, labels = y_q, train=False)
                 x_q = sample_q(model_s, buffer, y=y_q, init_x=x_q)
                 plot('{}/x_q_{}_{:>06d}.png'.format(opt.save_dir, epoch, idx), x_q)
             if opt.plot_cond:  # generate class-conditional samples
@@ -674,7 +674,7 @@ def validate_G(model, replay_buffer, opt, eval_loader=None):
     
     return replay_buffer
 
-def generation_stage(model_lists, replay_buffer, opt):
+def generation_stage(model_lists, replay_buffer, opt, logger=None):
     import numpy as np
     import matplotlib.pyplot as plt
     model, s, t = model_lists
@@ -691,7 +691,7 @@ def generation_stage(model_lists, replay_buffer, opt):
     freshh_epochs = opt.epochs
     for i in range(freshh_epochs):
         replay_buffer = replay_buffer.cpu()
-        samples, _ = sample_q(model, replay_buffer, y=y, other_models=(s, t))
+        samples, _ = sample_q(model, replay_buffer, y=y, other_models=(s, t), logger=logger, global_epoch=i)
         if i % 200 == 0:
             if os.path.exists(opt.save_dir):
                 # os.rmdir(opt.save_dir)\
@@ -713,5 +713,10 @@ def generation_stage(model_lists, replay_buffer, opt):
             )
             mean, var = inception_score(dataset, device, resize=True, splits=3, batch_size=8)
             print('IS: {} +- {}'.format(mean, var))
+            logger.log_value('Inception Score', mean, i)
+            # ckpt_dict = {
+            #     "replay_buffer": replay_buffer
+            # }
+            # torch.save(ckpt_dict, os.path.join(opt.save_ckpt, 'res_buffer_{}.pts'.format(i)))
 
     return replay_buffer

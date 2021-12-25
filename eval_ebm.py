@@ -58,17 +58,17 @@ def parse_option():
     parser.add_argument('--path_s', type=str, default=None, help="student model snapshot")
 
     parser.add_argument('--energy', default='mcmc', type=str, help='Sampling method to update EBM.')
-    parser.add_argument('--lmda_lc', default=100, type=float, help='Hyperparameter for update EBM.')
-    parser.add_argument('--lmda_l2', default=1.2e-5, type=float, help='Hyperparameter for l2-norm for generated loss')
-    parser.add_argument('--lmda_tv', default=2.5e-4, type=float, help='Hyperparameter for total variation loss.')
+    parser.add_argument('--lmda_lc', default=1., type=float, help='Hyperparameter for update EBM.')
+    parser.add_argument('--lmda_l2', default=0.2e-4, type=float, help='Hyperparameter for l2-norm for generated loss')
+    parser.add_argument('--lmda_tv', default=0., type=float, help='Hyperparameter for total variation loss.')
     parser.add_argument('--lmda_adi', default=1., type=float, help='Hyperparameter for l2-norm for generated loss')
-    parser.add_argument('--lmda_norm', default=1e-5, type=float, help='Hyperparameter for building p(x)')
-    parser.add_argument('--lmda_p_x_y', default=0., type=float, help='Hyperparameter for building p(x,y)')
+    parser.add_argument('--lmda_norm', default=0., type=float, help='Hyperparameter for building p(x)')
+    
     parser.add_argument('--g_steps', default=40, type=int, help='Total MCMC steps for generating images.')
     parser.add_argument('--step_size', default=1, type=float, help='learning rate of MCMC updation.')
     parser.add_argument('--capcitiy', default=10000, type=int, help='Capcity of sample buffer.')
     parser.add_argument('--trial', type=str, default='1', help='trial id')
-    parser.add_argument('--reinit_freq', type=str, default=0.05, help='reinitialization frequency.')
+    parser.add_argument('--reinit_freq', type=float, default=0.05, help='reinitialization frequency.')
     parser.add_argument('--print_every', type=int, default=20, help='reinitialization frequency.')
     parser.add_argument('--plot_uncond', action="store_true", help="Flag for saving class-conditional samples.")
     parser.add_argument('--plot_cond', action="store_true", help="Flag for saving class-conditional samples")
@@ -98,7 +98,7 @@ def parse_option():
 
     # opt.model_t = get_teacher_name(opt.path_t)
 
-    opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size_{}_lpx_{}_lpxy_{}_trial_{}_epoch_{}_gsteps_{}_step_size'.format(opt.model_s, opt.dataset, opt.learning_rate, opt.weight_decay, opt.capcitiy, opt.lmda_p_x, opt.lmda_p_x_y, opt.trial, opt.epochs, opt.g_steps, opt.step_size)
+    opt.model_name = '{}_{}_lr_{}_decay_{}_buffer_size_{}_trial_{}_epoch_{}_gsteps_{}_step_size'.format(opt.model_s, opt.dataset, opt.learning_rate, opt.weight_decay, opt.capcitiy, opt.trial, opt.epochs, opt.g_steps, opt.step_size)
 
     opt.tb_folder = os.path.join(opt.tb_path, opt.model_name)
     if not os.path.isdir(opt.tb_folder):
@@ -163,11 +163,11 @@ def main():
     opt.device = next(model_score.parameters()).device
 
     # tensorboard
-    # logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
+    logger = tb_logger.Logger(logdir=opt.tb_folder, flush_secs=2)
     # buffer = SampleBuffer(net_T=opt.path_t, max_samples=opt.capcitiy)
     buffer, model_score = get_replay_buffer(opt, model=model_score)
     if opt.use_lc:
-        buffer = generation_stage(model_list, buffer, opt)
+        buffer = generation_stage(model_list, buffer, opt, logger=logger)
     else:
         buffer = validate_G(model_score, buffer, opt)
     ckpt_dict = {

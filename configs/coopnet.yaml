@@ -5,7 +5,7 @@ act: swish
 norm: none
 g_steps: 20
 step_size: 1
-capcitiy: 50000
+capcitiy: 40000
 reinit_freq: 0.05
 cls: cls
 energy: mcmc
@@ -13,17 +13,19 @@ use_py: False
 data_noise: 0.03
 batch_size: 256
 plot_cond: True
-path_t: /data/lijingru/EBKD/save/models/resnet32x4_vanilla/ckpt_epoch_240.pth
+# path_t: /data/lijingru/EBKD/save/models/resnet32x4_vanilla/ckpt_epoch_240.pth
+path_t: /data/lijingru/EBKD/save/models/resnet32x4_cifar10_lr_0.01_decay_0.0005_trial_0/ckpt_epoch_240.pth
 learning_rate_ebm: 0.0003
 weight_decay_ebm: 0
-lr_decay_epochs_ebm: 100,130
+lr_decay_epochs_ebm: 100,150
 lr_decay_rate_ebm: 0.3
 short_run: False
-init_epochs: 0
-gpu: 3
+init_epochs: 200
+gpu: 6
 lmda_p_x: 1.
 lmda_p_x_y: 0.
-# load_buffer_path: /data/lijingru/EBKD/save/student_model/cifar100_lr_0.002_decay_0.0_ndf_256_trial_6_resnet28x10_cifar100_lr_0.0003_decay_0_buffer_size_10000_lpx_1.0_lpxy_0.0_energy_mode_mcmc_step_size_1_g_steps_20_trial_6/res_epoch_100.pts
+use_lc: False
+load_buffer_path: /data/lijingru/EBKD/save/student_model/cifar10_lr_0.002_decay_0.0_ndf_256_trial_1_resnet28x10_cifar10_lr_0.0003_decay_0_buffer_size_10000_lpx_1.0_lpxy_0.0_energy_mode_mcmc_step_size_1_g_steps_20_trial_1/res_epoch_200.pts
 
 model_params:
   name: 'ConditionalVAE'

@@ -29,8 +29,11 @@ def update_lc_theta(opt, x_q, t_logit, y_gt, s_logit):
     # l_tv = get_image_prior_losses(x_q)
     n_cls = opt.n_cls
     bs = x_q.shape[0]
-    y_one_hot = torch.eye(n_cls)[y_gt].to(x_q.device)
-    l_cls = -torch.sum(torch.log_softmax(t_logit, 1) * y_one_hot, 1).mean()
+    y_gt = y_gt.to(opt.device)
+    l_cls = torch.nn.CrossEntropyLoss()(t_logit, y_gt)
+    acc = torch.sum(t_logit.argmax(1) == y_gt) / opt.batch_size
+    # y_one_hot = torch.eye(n_cls)[y_gt].to(x_q.device)
+    # l_cls = -torch.sum(torch.log_softmax(t_logit, 1) * y_one_hot, 1).mean()
     # bs = x_q.size(0)
     # l_2 = torch.norm(x_q.view(bs, -1), dim=-1)
     # print(l_cls.shape, l_2.shape, l_tv.shape)
@@ -56,7 +59,7 @@ def update_lc_theta(opt, x_q, t_logit, y_gt, s_logit):
     lc = l_cls + loss_aux
     # print(lc.mean(), (lc - lc.mean()).mean())
     # c = lc.mean()
-    return lc, (l_cls, l_e, l_tv, l2, l2_reg)
+    return lc, (l_cls, l_e, l_tv, l2, l2_reg, acc)
 
 def get_color_distortion(s=1.0):
         # s is the strength of color distortion.
@@ -177,7 +180,7 @@ def langevin_at_x(opts, device=None):
         else:
             return samples.cuda(), inds
 
-    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_clip_grad=None, init_x=None, other_models=None):
+    def sample_q(f, replay_buffer, y=None, n_steps=opts.g_steps, open_clip_grad=None, init_x=None, other_models=None, logger=None, global_epoch=0):
         """this func takes in replay_buffer now so we have the option to sample from
         scratch (i.e. replay_buffer==[]).  See test_wrn_ebm.py for example.
         """
@@ -197,16 +200,26 @@ def langevin_at_x(opts, device=None):
             negative_free_energy = f(x_k, y=y)[0].sum()
             if use_lc:
                 assert other_models is not None
+                assert logger is not None
                 t, s = other_models
                 t_logit = t(x_k)
                 s_logit = s(x_k)
                 lc, a = update_lc_theta(opt=opts, x_q=x_k, y_gt=y, s_logit=s_logit, t_logit = t_logit)
-                # la, lb = a
+                cls, e, tv, l2, l2_reg, acc = a
+                i = k + global_epoch * n_steps
+                logger.log_value('l_cls', cls, i)
+                logger.log_value('l_js', e, i)
+                logger.log_value('l_tv', tv, i)
+                logger.log_value('l_2', l2, i)
+                logger.log_value('l2_norm', l2_reg, i)
+                logger.log_value('l_c', lc, i)
+                logger.log_value('Teacher Acc', acc, i)
+                logger.log_value('f(x, y)', negative_free_energy, i)
                 # print(la, lb, lc)
                 # print(negative_free_energy, lc)
-                negative_free_energy -= opts.lmda_lc * lc
-            f_prime = torch.autograd.grad(f(x_k, y=y)[0].sum(), [x_k], retain_graph=True)[0]
-            noise = 0.01 * torch.randn_like(x_k)
+                negative_free_energy -= opts.lmda_lc * lc * opts.batch_size
+            f_prime = torch.autograd.grad(negative_free_energy, [x_k], retain_graph=True)[0]
+            noise = 0.01 * torch.randn_like(x_k) if not opts.use_lc else 0.
             x_k = x_k + now_step_size * f_prime + noise
             # now_step_size *= 0.99
             # print((now_step_size * f_prime + noise).mean())
