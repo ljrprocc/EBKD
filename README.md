@@ -1,1 +1,6 @@
-Code implementation for paper "Energy-Based Knowledge Distillation."
+Code implementation for paper "GenKD."
+
+## Install requirements
+Run the following command:
+
+`pip install -r requirements.txt`
